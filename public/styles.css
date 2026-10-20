@@ -113,9 +113,27 @@ td { border-top: 1px solid #f0f2ef; padding: 12px 11px; font-size: 11px; white-s
 .field { display: grid; gap: 6px; }
 .field.full { grid-column: 1/-1; }
 .field label { font-size: 11px; color: #67746d; font-weight: 600; }
-.field input, .field select { border: 1px solid var(--line); border-radius: 8px; padding: 10px; width: 100%; font-size: 12px; outline: none; color: var(--ink); background: #fff; }
+.field input, .field select, .field textarea { border: 1px solid var(--line); border-radius: 8px; padding: 10px; width: 100%; font-size: 12px; outline: none; color: var(--ink); background: #fff; }
+.field textarea { min-height: 94px; resize: vertical; line-height: 1.5; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 19px; }
 .notice { margin: 12px 0; padding: 10px 12px; border-radius: 8px; font-size: 11px; background: #fff4d9; color: #83641f; line-height: 1.5; }
+.danger-notice { background: #fff0ed; color: #93463d; }
+.button.danger { color: var(--red); background: #fff0ed; }
+.button.danger:hover { background: #ffe4df; }
+.document-list, .history-list { display: grid; gap: 12px; }
+.document-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.document-row strong, .document-row small { display: block; }
+.document-row small, .muted-note { color: var(--muted); font-size: 12px; margin: 5px 0 0; }
+.document-row > div:last-child { display: flex; align-items: center; gap: 12px; }
+.upload-label { position: relative; overflow: hidden; cursor: pointer; }
+.upload-label input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.history-entry { padding: 15px; border: 1px solid var(--line); border-radius: 10px; }
+.history-entry-head { display: flex; justify-content: space-between; gap: 12px; }
+.history-entry-head time { color: var(--muted); font-size: 12px; }
+.history-entry p { margin: 10px 0; font-size: 13px; line-height: 1.5; }
+.history-entry details summary { color: var(--green); cursor: pointer; font-size: 12px; font-weight: 700; }
+.history-snapshots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.history-details { overflow: auto; max-height: 220px; padding: 10px; border-radius: 8px; background: var(--canvas); font: 11px/1.5 monospace; white-space: pre-wrap; }
 .login-page { min-height: 100vh; display: grid; grid-template-columns: 1fr 1fr; background: #fff; }
 .login-brand { background: #286b50; color: #fff; padding: 7vw; display: flex; flex-direction: column; justify-content: space-between; position: relative; overflow: hidden; }
 .login-brand:after { content: ""; position: absolute; width: 430px; height: 430px; border: 1px solid rgb(255 255 255 / 13%); border-radius: 50%; right: -150px; bottom: -190px; box-shadow: 0 0 0 35px rgb(255 255 255 / 4%),0 0 0 80px rgb(255 255 255 / 3%); }
@@ -229,7 +247,7 @@ td { font-size: 13px; padding: 14px 12px; }
 .login-box > p { font-size: 14px; }
 .login-brand p { font-size: 16px; }
 .login-brand h1 { font-size: clamp(34px, 4vw, 50px); }
-button:focus-visible, input:focus-visible, select:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid rgb(40 107 80 / 35%);
   outline-offset: 2px;
 }
@@ -244,4 +262,5 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   .stat strong { font-size: 22px; }
   .stat small { font-size: 10px; }
   .login-brand p { font-size: 13px; }
+  .history-snapshots { grid-template-columns: 1fr; }
 }

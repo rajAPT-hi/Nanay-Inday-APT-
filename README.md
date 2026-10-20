@@ -16,7 +16,7 @@ Open `http://localhost:3000` and sign in with an account created in Supabase Aut
 ## Configure Supabase
 
 1. Create a Supabase organization/project and save the database password somewhere private.
-2. In the project **SQL Editor**, open a new query, paste the complete contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This creates the tables, private receipt bucket, and row-level security policies. When updating an existing project, rerun the full schema so the `utility_bills` migration columns are applied.
+2. In the project **SQL Editor**, open a new query, paste the complete contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This creates or updates the tables, private receipt and renter-document buckets, lease audit functions, and row-level security policies. When updating an existing project, rerun the full schema so all migration columns, functions, and policies are applied.
 3. From **Project Settings → API Keys** (or **Data API**, depending on the dashboard version), copy the project URL and publishable/anon key. Copy the **service_role/secret key** separately for the Render server only. Never put this key in `public/`, browser code, GitHub, or chat.
 4. Configure Supabase **Authentication → SMTP Settings** with an email provider if you want password-reset emails to work. The admin can create renter accounts by setting an initial password directly; renter passwords are stored only by Supabase Auth, never in the rental tables.
 5. In Supabase **Authentication → Users**, add the property administrator with the owner's email. The schema creates a `profiles` row when that auth user is created. In **SQL Editor**, promote only that administrator account (replace the example email):
@@ -50,6 +50,10 @@ Open `http://localhost:3000` and sign in with an account created in Supabase Aut
 
 The schema enables row-level security. Renters can only read their own rental, charges, and utility bills, and can submit a receipt for an unpaid charge. Administrators manage renter records, rates, bills, and payment status. Receipt files are kept in a private Storage bucket and are shown with short-lived signed links.
 
+From **Renters & leases**, administrators can edit an active renter's unit, rental type, term, dates, and monthly rent. Every edit requires a reason and creates a before/after audit entry visible under **History**. Lease termination also requires a reason, disables the linked renter account in the app, and preserves the renter, payment history, and documents for administrator review. Terminated renters cannot submit receipts or access rental data.
+
+Administrators can upload or replace renter ID and signed physical contract images under **Documents**. Supported formats are JPG, PNG, and WebP, up to 10 MB per image. These files are stored in a private, admin-only Supabase Storage bucket; the app opens an administrator-only, short-lived signed link when a document is viewed. Apply the latest `supabase/schema.sql` before using these features.
+
 ## Deploy to Render
 
 1. Install Node.js 20 or later and Git on the PC if they are not already installed. Create a **private GitHub repository** and upload this project. The included `.gitignore` prevents `.env` and `node_modules` from being uploaded.
@@ -77,9 +81,9 @@ If the SIM device is on a home network, use a secure VPN/tunnel or a gateway ser
 ## Rental and billing behavior
 
 - Contracts support 6 or 12 months. The end date is calculated from the selected start date and term.
-- The administrator sets the water rate in PHP/m³ and enters the electricity provider's total bill and total kWh used. The app calculates the electricity price as `total bill ÷ total kWh`.
-- The renter's electricity usage is `ending submeter reading − beginning submeter reading`; the electricity charge is that usage multiplied by the calculated price per kWh. The utility charge is rounded to centavos.
-- A meter calculation records the provider bill and usage, both submeter readings, the rate used, the water and electricity charges, and creates a matching utility payment charge.
+- The administrator enters the electricity provider's current bill and total kWh. When calculating a utility charge, the app saves the visible utility rates first and calculates the provider rate as `provider bill ÷ provider kWh`.
+- Electricity usage is the higher meter reading minus the lower meter reading, so the smaller reading is always subtracted and the usage cannot be negative. The electricity charge is `usage × provider rate`. Water usage remains current minus previous and cannot be negative. Charges are rounded to centavos.
+- Each calculation stores the provider bill, provider kWh, calculated rate, previous and current meter readings, usage, and water/electricity charges as a permanent utility-bill record. The matching payment and utility record are created together, so a failed save cannot leave only one of them behind.
 - Payments are created by an administrator for each billing period. Renters can upload an image or PDF receipt; the admin reviews it and marks the charge paid.
 - Late fees are calculated as `days past due after grace period × fee per late day` and shown on unpaid balances; they are not silently added to the original charge amount.
 - Contracts ending within 30 days appear in the administrator dashboard.

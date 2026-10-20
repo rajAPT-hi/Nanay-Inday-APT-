@@ -16,6 +16,7 @@ let state = {
   renters: [],
   payments: [],
   utility_bills: [],
+  lease_changes: [],
   settings: {
     water_rate: 45,
     electricity_rate: 0,
@@ -27,24 +28,35 @@ let state = {
 };
 
 async function fetchCloudData() {
-  const [renters, payments, utilities, settings, profile] = await Promise.all([
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles").select("role, full_name, account_enabled").eq("id", state.user.id).single();
+  if (profileError) throw profileError;
+  if (!profile.account_enabled) {
+    throw new Error("Your rental access has been disabled. Contact the property administrator.");
+  }
+  if (!["admin", "renter"].includes(profile.role)) {
+    throw new Error("Your account does not have an assigned app role. Ask an administrator to set it up.");
+  }
+
+  const results = await Promise.all([
     supabase.from("renters").select("*").order("created_at", { ascending: false }),
     supabase.from("payments").select("*").order("due_date", { ascending: false }),
     supabase.from("utility_bills").select("*").order("created_at", { ascending: false }),
     supabase.from("settings").select("*"),
-    supabase.from("profiles").select("role, full_name").eq("id", state.user.id).single(),
+    profile.role === "admin"
+      ? supabase.from("lease_changes").select("*").order("created_at", { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
   ]);
-  for (const result of [renters, payments, utilities, settings, profile]) {
+  for (const result of results) {
     if (result.error) throw result.error;
   }
-  if (!["admin", "renter"].includes(profile.data.role)) {
-    throw new Error("Your account does not have an assigned app role. Ask an administrator to set it up.");
-  }
-  state.role = profile.data.role;
-  state.user.name = profile.data.full_name || state.user.email;
+  const [renters, payments, utilities, settings, leaseChanges] = results;
+  state.role = profile.role;
+  state.user.name = profile.full_name || state.user.email;
   state.renters = renters.data;
   state.payments = payments.data;
   state.utility_bills = utilities.data;
+  state.lease_changes = leaseChanges.data;
   state.settings = {
     ...state.settings,
     ...Object.fromEntries(settings.data.map((row) => [row.key, Number(row.value)])),
@@ -66,7 +78,7 @@ function electricityRate(settings = state.settings) {
   const bill = Number(settings.electricity_total_bill);
   const usage = Number(settings.electricity_total_usage);
   return bill > 0 && usage > 0
-    ? bill / usage
+    ? Math.round((bill / usage) * 100000000) / 100000000
     : Number(settings.electricity_rate) || 0;
 }
 function initials(name = "") {
@@ -74,6 +86,9 @@ function initials(name = "") {
 }
 function renterById(id) {
   return state.renters.find((renter) => renter.id === id) || {};
+}
+function activeRenters() {
+  return state.renters.filter((renter) => renter.status !== "terminated");
 }
 function lateFee(payment) {
   if (payment.status === "paid") return 0;
@@ -89,14 +104,16 @@ function paymentStatus(payment) {
   return payment.status === "review" ? "review" : "due";
 }
 function statusBadge(status) {
-  const label = { paid: "Paid", due: "Due", overdue: "Overdue", review: "For review", active: "Active", expiring: "Expiring soon" }[status] || status;
+  const label = { paid: "Paid", due: "Due", overdue: "Overdue", review: "For review", active: "Active", expiring: "Expiring soon", terminated: "Terminated", expired: "Expired" }[status] || status;
   return `<span class="badge ${escapeHtml(status)}">${label}</span>`;
 }
 function isExpiring(renter) {
+  if (renter.status === "terminated") return false;
   const remaining = (new Date(`${renter.contract_end}T23:59:59`) - Date.now()) / 86400000;
   return remaining >= 0 && remaining <= 30;
 }
 function contractStatus(renter) {
+  if (renter.status === "terminated") return "terminated";
   return new Date(`${renter.contract_end}T23:59:59`).getTime() < Date.now()
     ? "expired"
     : isExpiring(renter) ? "expiring" : "active";
@@ -148,7 +165,7 @@ function appShell(content) {
       <header class="topbar"><div><div class="eyebrow">Nanay Inday's Rentals &nbsp; / &nbsp; ${pageTitle()}</div><h1>${pageTitle()}</h1></div>
         <div class="top-actions"><span class="mode-pill live">● Cloud connected</span>
           ${!renterMode && state.tab === "renters" ? `<button class="button primary" data-action="add-renter">＋ Add renter</button>` : ""}
-          ${!renterMode && state.tab === "payments" ? `<button class="button primary" data-action="add-payment">＋ Create charge</button>` : ""}
+          ${!renterMode && state.tab === "payments" && activeRenters().length ? `<button class="button primary" data-action="add-payment">＋ Create charge</button>` : ""}
           ${!renterMode && state.tab === "utilities" ? `<button class="button primary" data-action="add-utility">＋ Calculate bill</button>` : ""}
         </div>
       </header>${content}
@@ -159,12 +176,12 @@ function overviewPage() {
   if (state.role === "renter") return renterPage();
   const pendingPayments = state.payments.filter((payment) => payment.status !== "paid");
   const overdueTotal = pendingPayments.reduce((total, payment) => total + Number(payment.amount) + lateFee(payment), 0);
-  const expiringRenters = state.renters.filter(isExpiring);
+  const expiringRenters = state.renters.filter((renter) => renter.status !== "terminated" && isExpiring(renter));
   const recentPayments = [...state.payments].sort((a, b) => new Date(b.paid_at || b.due_date) - new Date(a.paid_at || a.due_date)).slice(0, 4);
   return `<section class="welcome"><div><h2>Welcome back, ${escapeHtml(state.user.name.split(" ")[0])} 👋</h2><p>Here is your property summary for today.</p></div>
       <button class="button" data-action="add-renter">＋ Add new renter</button></section>
     <section class="stats">
-      <div class="stat"><div class="stat-head"><span>Active renters</span><span class="stat-icon">♙</span></div><strong>${state.renters.filter((renter) => contractStatus(renter) !== "expired").length}</strong><small>Across your rental property</small></div>
+      <div class="stat"><div class="stat-head"><span>Active renters</span><span class="stat-icon">♙</span></div><strong>${state.renters.filter((renter) => renter.status !== "terminated" && contractStatus(renter) !== "expired").length}</strong><small>Across your rental property</small></div>
       <div class="stat"><div class="stat-head"><span>Payments received</span><span class="stat-icon">₱</span></div><strong>${money(state.payments.filter((p) => p.status === "paid").reduce((total, p) => total + Number(p.amount), 0))}</strong><small>${state.payments.filter((p) => p.status === "paid").length} payments recorded</small></div>
       <div class="stat"><div class="stat-head"><span>Outstanding balance</span><span class="stat-icon">◷</span></div><strong>${money(overdueTotal)}</strong><small>Includes calculated late fees</small></div>
       <div class="stat"><div class="stat-head"><span>Contracts expiring</span><span class="stat-icon">▣</span></div><strong>${expiringRenters.length}</strong><small>Within the next 30 days</small></div>
@@ -186,14 +203,22 @@ function formatDate(date) {
   if (!date) return "—";
   return new Date(`${String(date).slice(0, 10)}T00:00:00`).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
 }
+function calculateContractEnd(start, months) {
+  const [year, month, day] = start.split("-").map(Number);
+  const targetMonth = month - 1 + Number(months);
+  const lastDay = new Date(Date.UTC(year, targetMonth + 1, 0)).getUTCDate();
+  const endDate = new Date(Date.UTC(year, targetMonth, Math.min(day, lastDay)));
+  endDate.setUTCDate(endDate.getUTCDate() - 1);
+  return endDate.toISOString().slice(0, 10);
+}
 function renderRenterTable(renters) {
   if (!renters.length) return `<div class="empty"><span>♙</span>No renters yet. Add your first renter to get started.</div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>RENTER</th><th>UNIT</th><th>RENT / MONTH</th><th>CONTRACT ENDS</th><th>STATUS</th><th>ACCOUNT</th></tr></thead><tbody>
-    ${renters.map((renter) => `<tr><td><div class="person-cell"><div class="avatar">${initials(renter.full_name)}</div><div><strong>${escapeHtml(renter.full_name)}</strong><small>${escapeHtml(renter.email)}</small></div></div></td><td>${escapeHtml(renter.unit_name)}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renter.rental_type)}</small></td><td>${money(renter.rent_amount)}</td><td>${formatDate(renter.contract_end)}</td><td>${statusBadge(contractStatus(renter))}</td><td>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${renter.id}">Change password</button>` : "No login"}</td></tr>`).join("")}
+  return `<div class="table-wrap"><table><thead><tr><th>RENTER</th><th>UNIT</th><th>RENT / MONTH</th><th>CONTRACT ENDS</th><th>STATUS</th><th>LEASE / DOCUMENTS</th></tr></thead><tbody>
+    ${renters.map((renter) => `<tr><td><div class="person-cell"><div class="avatar">${initials(renter.full_name)}</div><div><strong>${escapeHtml(renter.full_name)}</strong><small>${escapeHtml(renter.email)}</small></div></div></td><td>${escapeHtml(renter.unit_name)}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renter.rental_type)}</small></td><td>${money(renter.rent_amount)}</td><td>${formatDate(renter.contract_end)}</td><td>${statusBadge(contractStatus(renter))}</td><td>${renter.status !== "terminated" ? `<button class="text-button" data-action="edit-lease" data-id="${renter.id}">Edit lease</button><button class="text-button" style="color:var(--red)" data-action="terminate-lease" data-id="${renter.id}">Terminate</button>` : ""}<button class="text-button" data-action="renter-documents" data-id="${renter.id}">Documents</button><button class="text-button" data-action="lease-history" data-id="${renter.id}">History</button>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${renter.id}">Password</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>`;
 }
 function rentersPage() {
-  return `<div class="section-title"><div><p>Manage renter accounts, rental types, and contract dates.</p></div></div>
+  return `<div class="section-title"><div><p>Manage lease terms, record the reason for changes, terminate leases, and securely store renter documents.</p></div></div>
     <div class="toolbar"><input class="search" id="renter-search" placeholder="⌕  Search renters or units..." /><select class="filter" id="renter-filter"><option value="all">All rental types</option><option>Room</option><option>House</option><option>Apartment</option></select></div>
     <div class="card" id="renter-table">${renderRenterTable(state.renters)}</div>`;
 }
@@ -215,12 +240,12 @@ function utilitiesPage() {
   const totalBill = Number(state.settings.electricity_total_bill);
   const totalUsage = Number(state.settings.electricity_total_usage);
   const rateText = totalBill > 0 && totalUsage > 0
-    ? `₱${(totalBill / totalUsage).toFixed(4)} per kWh (${totalBill.toFixed(2)} ÷ ${totalUsage.toFixed(2)})`
+    ? `₱${electricityRate().toFixed(8)} per kWh (${totalBill.toFixed(2)} ÷ ${totalUsage.toFixed(2)})`
     : "Enter the total bill and kWh to calculate the per-kWh rate.";
   return `<div class="section-title"><div><p>Set your local utility rates. Only administrators can calculate and record meter readings.</p></div></div>
     <div class="utility-grid">
       ${rateCard("water_rate", "Water", "PHP per cubic meter", "m³")}
-      <div class="utility-card"><h3>Electricity rate</h3><p>Calculate the price per kWh from your provider bill.</p><div class="form-grid">
+      <div class="utility-card"><h3>Electricity rate</h3><p>Enter the current provider bill and total kWh. Clicking Calculate bill saves these values and keeps a billing snapshot.</p><div class="form-grid">
         <div class="field"><label>Total electricity bill (PHP)</label><input type="number" min="0" step="0.01" data-setting="electricity_total_bill" value="${Number(state.settings.electricity_total_bill)}" /></div>
         <div class="field"><label>Total kWh used on bill</label><input type="number" min="0" step="0.01" data-setting="electricity_total_usage" value="${Number(state.settings.electricity_total_usage)}" /></div>
       </div><div class="utility-summary" id="electricity-rate-preview">Calculated rate: ${rateText}</div></div>
@@ -230,8 +255,17 @@ function utilitiesPage() {
       </div><button class="button secondary" style="margin-top:12px" data-action="save-rates">Save policy</button></div>
     </div>
     <div class="card" style="margin-top:17px"><div class="card-head"><h3>Recent meter calculations</h3><button class="button primary" data-action="add-utility">＋ Calculate bill</button></div>
-      ${bills.length ? `<div class="table-wrap"><table><thead><tr><th>RENTER / UNIT</th><th>PERIOD</th><th>WATER USAGE</th><th>ELECTRICITY USAGE</th><th>UTILITY CHARGE</th></tr></thead><tbody>${bills.map((bill) => `<tr><td>${escapeHtml(renterById(bill.renter_id).full_name || "Renter")}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renterById(bill.renter_id).unit_name || "")}</small></td><td>${escapeHtml(bill.period)}</td><td>${Number(bill.water_usage)} m³</td><td>${Number(bill.electricity_usage)} kWh</td><td><strong>${money(bill.amount)}</strong></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><span>ϟ</span>No utility bills yet. Enter meter readings to calculate the first bill.</div>`}
+      ${bills.length ? `<div class="table-wrap"><table><thead><tr><th>RENTER / UNIT</th><th>PERIOD</th><th>WATER</th><th>ELECTRIC METER</th><th>USAGE</th><th>PROVIDER BILL ÷ kWh = RATE</th><th>ELECTRIC CHARGE</th><th>TOTAL</th></tr></thead><tbody>${bills.map((bill) => `<tr><td>${escapeHtml(renterById(bill.renter_id).full_name || "Renter")}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renterById(bill.renter_id).unit_name || "")}</small></td><td>${escapeHtml(bill.period)}</td><td>${Number(bill.water_usage)} m³<small style="display:block;color:#89958d;margin-top:3px">${money(bill.water_charge)}</small></td><td>${Number(bill.electricity_previous)} → ${Number(bill.electricity_current)} kWh</td><td>${Number(bill.electricity_usage)} kWh</td><td>${money(bill.electricity_total_bill)} ÷ ${Number(bill.electricity_total_usage)} = ₱${Number(bill.electricity_rate).toFixed(8)}</td><td>${money(bill.electricity_charge)}</td><td><strong>${money(bill.amount)}</strong></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><span>ϟ</span>No utility bills yet. Enter the provider bill and kWh, save the rates, then calculate a bill.</div>`}
     </div>`;
+}
+function updateElectricityRatePreview() {
+  const preview = document.querySelector("#electricity-rate-preview");
+  const bill = Number(document.querySelector('[data-setting="electricity_total_bill"]')?.value);
+  const usage = Number(document.querySelector('[data-setting="electricity_total_usage"]')?.value);
+  if (!preview) return;
+  preview.textContent = bill > 0 && usage > 0
+    ? `Calculated rate: ₱${(Math.round((bill / usage) * 100000000) / 100000000).toFixed(8)} per kWh (${bill.toFixed(2)} ÷ ${usage.toFixed(2)})`
+    : "Enter the current provider bill and a total kWh greater than zero.";
 }
 function rateCard(key, name, unit, suffix) {
   return `<div class="utility-card"><h3>${name} rate</h3><p>${unit}</p><div class="utility-rate"><div class="field"><label>Rate</label><input type="number" min="0" step="0.01" data-setting="${key}" value="${Number(state.settings[key])}" /></div><span style="font-size:11px;color:#718078">${suffix}</span></div><div class="utility-summary">Meter usage × rate = renter charge</div></div>`;
@@ -268,6 +302,7 @@ function render() {
     : state.tab === "renters" ? rentersPage()
       : state.tab === "payments" ? paymentsPage() : utilitiesPage();
   app.innerHTML = appShell(content);
+  if (state.tab === "utilities") updateElectricityRatePreview();
 }
 
 function modal(title, body, actions) {
@@ -300,11 +335,128 @@ function changeRenterPasswordModal(renterId) {
     <div class="field full notice">The new password replaces the renter's current password immediately. Share it privately; never send it in a group message.</div>
   </div></form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-renter-password">Update password</button>`);
 }
+function editLeaseModal(renterId) {
+  const renter = renterById(renterId);
+  if (renter.status === "terminated") return toast("Terminated leases cannot be edited.", true);
+  modal(`Edit lease · ${escapeHtml(renter.full_name)}`, `<form id="lease-form" data-renter-id="${escapeHtml(renterId)}"><div class="form-grid">
+    <div class="field"><label>Unit name / number</label><input name="unit_name" value="${escapeHtml(renter.unit_name)}" required /></div>
+    <div class="field"><label>Rental type</label><select name="rental_type" required>${["Room", "House", "Apartment"].map((type) => `<option ${renter.rental_type === type ? "selected" : ""}>${type}</option>`).join("")}</select></div>
+    <div class="field"><label>Contract term</label><select name="contract_months" required><option value="6" ${Number(renter.contract_months) === 6 ? "selected" : ""}>6 months</option><option value="12" ${Number(renter.contract_months) === 12 ? "selected" : ""}>1 year (12 months)</option></select></div>
+    <div class="field"><label>Monthly rent (PHP)</label><input name="rent_amount" type="number" min="0" step=".01" value="${Number(renter.rent_amount)}" required /></div>
+    <div class="field"><label>Contract start</label><input name="contract_start" type="date" value="${escapeHtml(renter.contract_start)}" required /></div>
+    <div class="field"><label>Contract end (calculated)</label><input name="contract_end" type="date" value="${escapeHtml(renter.contract_end)}" readonly required /></div>
+    <div class="field full"><label>Required reason for this change</label><textarea name="reason" minlength="3" maxlength="1000" placeholder="Example: Monthly rent increased by agreement" required></textarea></div>
+    </div></form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-lease">Save lease changes</button>`);
+  const form = document.querySelector("#lease-form");
+  const updateEndDate = () => { form.elements.contract_end.value = calculateContractEnd(form.elements.contract_start.value, form.elements.contract_months.value); };
+  form.elements.contract_start.addEventListener("change", updateEndDate);
+  form.elements.contract_months.addEventListener("change", updateEndDate);
+}
+function terminateLeaseModal(renterId) {
+  const renter = renterById(renterId);
+  if (renter.status === "terminated") return toast("This lease is already terminated.", true);
+  modal(`Terminate lease · ${escapeHtml(renter.full_name)}`, `<form id="terminate-form" data-renter-id="${escapeHtml(renterId)}">
+    <div class="notice danger-notice">This immediately disables this renter's app access. Their renter record, payment history, and documents will be retained for administrators.</div>
+    <div class="field" style="margin-top:16px"><label>Required termination reason</label><textarea name="reason" minlength="3" maxlength="1000" placeholder="Example: Lease ended or non-payment" required></textarea></div>
+    </form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button danger" data-action="confirm-termination">Terminate lease</button>`);
+}
+function renterDocumentsModal(renterId) {
+  const renter = renterById(renterId);
+  const documentRow = (kind, label, path) => `<div class="document-row"><div><strong>${label}</strong><small>${path ? "Uploaded" : "No image uploaded"}</small></div><div>${path ? `<button class="text-button" data-action="view-renter-document" data-id="${escapeHtml(renterId)}" data-kind="${kind}">View</button>` : ""}<label class="button secondary upload-label">${path ? "Replace" : "Upload"}<input type="file" accept="image/jpeg,image/png,image/webp" data-renter-document="${kind}" data-id="${escapeHtml(renterId)}" /></label></div></div>`;
+  modal(`Renter documents · ${escapeHtml(renter.full_name)}`, `<div class="document-list">
+    ${documentRow("id", "Renter ID image", renter.id_image_path)}
+    ${documentRow("contract", "Physical contract image", renter.contract_image_path)}
+    <p class="muted-note">Images only: JPG, PNG, or WebP. Maximum file size is 10 MB. Documents are private and visible to administrators only.</p>
+    </div>`, `<button class="button secondary" data-action="close-modal">Close</button>`);
+}
+function leaseHistoryModal(renterId) {
+  const renter = renterById(renterId);
+  const entries = state.lease_changes.filter((entry) => entry.renter_id === renterId);
+  const details = (value) => `<pre class="history-details">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+  modal(`Lease history · ${escapeHtml(renter.full_name)}`, entries.length
+    ? `<div class="history-list">${entries.map((entry) => `<article class="history-entry"><div class="history-entry-head"><strong>${entry.action === "lease_terminated" ? "Lease terminated" : "Lease updated"}</strong><time>${formatDate(entry.created_at)}</time></div><p><strong>Reason:</strong> ${escapeHtml(entry.reason)}</p><details><summary>Before and after</summary><div class="history-snapshots"><div><strong>Before</strong>${details(entry.previous_details)}</div><div><strong>After</strong>${details(entry.new_details)}</div></div></details></article>`).join("")}</div>`
+    : `<div class="empty">No lease changes have been recorded for this renter.</div>`,
+  `<button class="button secondary" data-action="close-modal">Close</button>`);
+}
+async function saveLease() {
+  const form = document.querySelector("#lease-form");
+  if (!form.reportValidity()) return;
+  const values = Object.fromEntries(new FormData(form));
+  try {
+    const { error } = await supabase.rpc("admin_update_lease", {
+      p_renter_id: form.dataset.renterId,
+      p_unit_name: values.unit_name,
+      p_rental_type: values.rental_type,
+      p_contract_months: Number(values.contract_months),
+      p_contract_start: values.contract_start,
+      p_contract_end: values.contract_end,
+      p_rent_amount: Number(values.rent_amount),
+      p_reason: values.reason.trim(),
+    });
+    if (error) throw error;
+    await fetchCloudData();
+    document.querySelector(".modal-backdrop")?.remove();
+    render();
+    toast("Lease details updated and change recorded.");
+  } catch (error) { toast(error.message || "Could not update lease details.", true); }
+}
+async function terminateLease() {
+  const form = document.querySelector("#terminate-form");
+  if (!form.reportValidity()) return;
+  const reason = new FormData(form).get("reason").trim();
+  try {
+    const { error } = await supabase.rpc("admin_terminate_lease", {
+      p_renter_id: form.dataset.renterId,
+      p_reason: reason,
+    });
+    if (error) throw error;
+    await fetchCloudData();
+    document.querySelector(".modal-backdrop")?.remove();
+    render();
+    toast("Lease terminated. Renter access is disabled and records are retained.");
+  } catch (error) { toast(error.message || "Could not terminate lease.", true); }
+}
+async function uploadRenterDocument(renterId, kind, file) {
+  if (!file) return;
+  const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+  if (!allowedTypes.includes(file.type)) return toast("Choose a JPG, PNG, or WebP image.", true);
+  if (file.size > 10 * 1024 * 1024) return toast("The image must be 10 MB or smaller.", true);
+  const renter = renterById(renterId);
+  const column = kind === "id" ? "id_image_path" : "contract_image_path";
+  const safeName = file.name.replace(/[^\w.-]/g, "_");
+  const path = `${renterId}/${kind}/${Date.now()}-${safeName}`;
+  try {
+    const { error: uploadError } = await supabase.storage.from("renter-documents").upload(path, file, { upsert: false, contentType: file.type });
+    if (uploadError) throw uploadError;
+    const { error: updateError } = await supabase.from("renters").update({ [column]: path }).eq("id", renterId);
+    if (updateError) {
+      const { error: cleanupError } = await supabase.storage.from("renter-documents").remove([path]);
+      if (cleanupError) throw new Error(`${updateError.message} The uploaded file could not be cleaned up: ${cleanupError.message}`);
+      throw updateError;
+    }
+    const oldPath = renter[column];
+    renter[column] = path;
+    if (oldPath && oldPath !== path) {
+      const { error: cleanupError } = await supabase.storage.from("renter-documents").remove([oldPath]);
+      if (cleanupError) toast(`Image saved, but the previous file could not be removed: ${cleanupError.message}`, true);
+    }
+    renterDocumentsModal(renterId);
+    toast("Renter document uploaded securely.");
+  } catch (error) { toast(error.message || "Could not upload renter document.", true); }
+}
+async function viewRenterDocument(renterId, kind) {
+  const renter = renterById(renterId);
+  const path = kind === "id" ? renter.id_image_path : renter.contract_image_path;
+  if (!path) return toast("No image has been uploaded yet.", true);
+  const { data, error } = await supabase.storage.from("renter-documents").createSignedUrl(path, 60);
+  if (error) return toast(error.message, true);
+  window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+}
 function addPaymentModal() {
   const today = new Date();
   const defaultDue = new Date(today.getFullYear(), today.getMonth(), 5).toISOString().slice(0, 10);
   modal("Create a rental charge", `<form id="payment-form"><div class="form-grid">
-    <div class="field full"><label>Renter</label><select name="renter_id" required>${state.renters.map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)} · ${escapeHtml(r.unit_name)}</option>`).join("")}</select></div>
+    <div class="field full"><label>Renter</label><select name="renter_id" required>${activeRenters().map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)} · ${escapeHtml(r.unit_name)}</option>`).join("")}</select></div>
     <div class="field"><label>Charge period</label><input name="period" value="${today.toLocaleDateString("en-PH", { month: "long", year: "numeric" })}" required /></div>
     <div class="field"><label>Due date</label><input name="due_date" type="date" value="${defaultDue}" required /></div>
     <div class="field"><label>Base rent (PHP)</label><input name="base_amount" type="number" min="0" step=".01" required /></div>
@@ -315,52 +467,88 @@ function addPaymentModal() {
   form.elements.base_amount.value = renterById(form.elements.renter_id.value).rent_amount || 0;
 }
 function addUtilityModal() {
-  if (!state.renters.length) return toast("Add a renter before calculating a utility bill.", true);
+  if (!activeRenters().length) return toast("Add an active renter before calculating a utility bill.", true);
   if (!(Number(state.settings.electricity_total_bill) > 0) || !(Number(state.settings.electricity_total_usage) > 0)) {
     return toast("Enter the total electricity bill and total kWh in Utility billing first.", true);
   }
   const month = new Date().toLocaleDateString("en-PH", { month: "long", year: "numeric" });
+  const firstRenter = activeRenters()[0];
+  const previousBill = state.utility_bills.find((bill) => bill.renter_id === firstRenter.id);
   modal("Calculate a utility bill", `<form id="utility-form"><div class="form-grid">
-    <div class="field full"><label>Renter / unit</label><select name="renter_id">${state.renters.map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)} · ${escapeHtml(r.unit_name)}</option>`).join("")}</select></div>
+    <div class="field full"><label>Renter / unit</label><select name="renter_id">${activeRenters().map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)} · ${escapeHtml(r.unit_name)}</option>`).join("")}</select></div>
     <div class="field full"><label>Billing period</label><input name="period" value="${month}" required /></div>
-    <div class="field"><label>Previous water meter (m³)</label><input name="water_previous" type="number" min="0" step=".01" value="0" required /></div>
-    <div class="field"><label>Current water meter (m³)</label><input name="water_current" type="number" min="0" step=".01" value="0" required /></div>
-    <div class="field"><label>Previous electricity meter (kWh)</label><input name="electricity_previous" type="number" min="0" step=".01" value="0" required /></div>
-    <div class="field"><label>Current electricity meter (kWh)</label><input name="electricity_current" type="number" min="0" step=".01" value="0" required /></div>
+    <div class="field"><label>Previous water meter (m³)</label><input name="water_previous" type="number" min="0" step=".01" value="${Number(previousBill?.water_current || 0)}" required /></div>
+    <div class="field"><label>Current water meter (m³)</label><input name="water_current" type="number" min="0" step=".01" placeholder="Enter current reading" required /></div>
+    <div class="field"><label>Previous electricity meter (kWh)</label><input name="electricity_previous" type="number" min="0" step=".01" value="${Number(previousBill?.electricity_current || 0)}" required /></div>
+    <div class="field"><label>Current electricity meter (kWh)</label><input name="electricity_current" type="number" min="0" step=".01" placeholder="Enter current reading" required /></div>
+    <div class="field full notice">Previous readings are prefilled from this renter's latest saved utility bill. Enter the current meter readings to calculate the new usage.</div>
     <div class="field full notice" id="utility-preview">Enter meter readings to see the calculation using the current rates.</div></div></form>`,
   `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-utility">Save utility charge</button>`);
-  document.querySelector("#utility-form").addEventListener("input", updateUtilityPreview);
+  const form = document.querySelector("#utility-form");
+  form.addEventListener("input", updateUtilityPreview);
+  form.elements.renter_id.addEventListener("change", () => {
+    const latestBill = state.utility_bills.find((bill) => bill.renter_id === form.elements.renter_id.value);
+    form.elements.water_previous.value = Number(latestBill?.water_current || 0);
+    form.elements.electricity_previous.value = Number(latestBill?.electricity_current || 0);
+    form.elements.water_current.value = "";
+    form.elements.electricity_current.value = "";
+    updateUtilityPreview();
+  });
   updateUtilityPreview();
+}
+async function startUtilityFlow() {
+  const billInput = document.querySelector('[data-setting="electricity_total_bill"]');
+  const usageInput = document.querySelector('[data-setting="electricity_total_usage"]');
+  if (billInput && usageInput) {
+    const bill = Number(billInput.value);
+    const usage = Number(usageInput.value);
+    if (!(bill > 0)) {
+      toast("Enter the current provider bill amount before calculating a utility charge.", true);
+      billInput.focus();
+      return;
+    }
+    if (!(usage > 0)) {
+      toast("Enter the total kWh shown on the current provider bill before calculating a utility charge.", true);
+      usageInput.focus();
+      return;
+    }
+    const saved = await saveRates({ renderPage: false, successToast: false });
+    if (!saved) return;
+  }
+  addUtilityModal();
 }
 function updateUtilityPreview() {
   const form = document.querySelector("#utility-form");
   if (!form) return;
   const values = Object.fromEntries(new FormData(form));
+  if (values.water_current === "" || values.electricity_current === "") {
+    document.querySelector("#utility-preview").textContent = "Enter both current meter readings to calculate the utility charge.";
+    return;
+  }
   const water = Number(values.water_current) - Number(values.water_previous);
-  const power = Number(values.electricity_current) - Number(values.electricity_previous);
+  const currentElectricityReading = Number(values.electricity_current);
+  const previousElectricityReading = Number(values.electricity_previous);
+  const higherElectricityReading = Math.max(currentElectricityReading, previousElectricityReading);
+  const lowerElectricityReading = Math.min(currentElectricityReading, previousElectricityReading);
+  const power = higherElectricityReading - lowerElectricityReading;
   const unitRate = electricityRate();
   const waterCharge = water * Number(state.settings.water_rate);
   const electricityCharge = power * unitRate;
   const total = Math.round((waterCharge + electricityCharge) * 100) / 100;
   const preview = document.querySelector("#utility-preview");
-  preview.textContent = water < 0 || power < 0
-    ? "Current readings must be greater than or equal to previous readings."
-    : `Water: ${water.toFixed(2)} m³ × ${money(state.settings.water_rate)}. Electricity: (${Number(state.settings.electricity_total_bill).toFixed(2)} ÷ ${Number(state.settings.electricity_total_usage).toFixed(2)} kWh) = ₱${unitRate.toFixed(4)}/kWh; (${Number(values.electricity_current).toFixed(2)} − ${Number(values.electricity_previous).toFixed(2)}) × ₱${unitRate.toFixed(4)} = ${money(electricityCharge)}. Total utility charge: ${money(total)}.`;
+  preview.textContent = water < 0
+    ? "Current water reading cannot be lower than the previous water reading."
+    : `Water: ${water.toFixed(2)} m³ × ${money(state.settings.water_rate)}. Electricity rate: ${money(state.settings.electricity_total_bill)} ÷ ${Number(state.settings.electricity_total_usage).toFixed(2)} kWh = ₱${unitRate.toFixed(8)}/kWh. Electricity usage: higher reading ${higherElectricityReading.toFixed(2)} − lower reading ${lowerElectricityReading.toFixed(2)} = ${power.toFixed(2)} kWh; charge: ${power.toFixed(2)} × ₱${unitRate.toFixed(8)} = ${money(electricityCharge)}. Total utility charge: ${money(total)}.`;
 }
 
 async function saveRenter() {
   const form = document.querySelector("#renter-form");
   if (!form.reportValidity()) return;
   const data = Object.fromEntries(new FormData(form));
-  const [startYear, startMonth, startDay] = data.contract_start.split("-").map(Number);
-  const targetMonth = startMonth - 1 + Number(data.contract_months);
-  const lastDay = new Date(Date.UTC(startYear, targetMonth + 1, 0)).getUTCDate();
-  const endDate = new Date(Date.UTC(startYear, targetMonth, Math.min(startDay, lastDay)));
-  endDate.setUTCDate(endDate.getUTCDate() - 1);
   const renter = {
     full_name: data.full_name.trim(), email: data.email.trim(), phone: data.phone.trim(),
     unit_name: data.unit_name.trim(), rental_type: data.rental_type, contract_months: Number(data.contract_months),
-    contract_start: data.contract_start, contract_end: endDate.toISOString().slice(0, 10), rent_amount: Number(data.rent_amount),
+    contract_start: data.contract_start, contract_end: calculateContractEnd(data.contract_start, data.contract_months), rent_amount: Number(data.rent_amount),
   };
   try {
     {
@@ -437,58 +625,68 @@ async function saveUtility() {
   if (!form.reportValidity()) return;
   const data = Object.fromEntries(new FormData(form));
   const waterUsage = Number(data.water_current) - Number(data.water_previous);
-  const electricityUsage = Number(data.electricity_current) - Number(data.electricity_previous);
-  if (waterUsage < 0 || electricityUsage < 0) return toast("Current readings cannot be lower than previous readings.", true);
+  if (waterUsage < 0) return toast("Current water reading cannot be lower than the previous water reading.", true);
   if (!(Number(state.settings.electricity_total_bill) > 0) || !(Number(state.settings.electricity_total_usage) > 0)) {
-    return toast("Enter the total electricity bill and total kWh in Utility billing first.", true);
+    return toast("Enter the current provider bill and total kWh in Utility billing first.", true);
   }
-  const electricityUnitRate = electricityRate();
-  const waterCharge = waterUsage * Number(state.settings.water_rate);
-  const electricityCharge = electricityUsage * electricityUnitRate;
-  const amount = Math.round((waterCharge + electricityCharge) * 100) / 100;
-  const bill = {
-    renter_id: data.renter_id, period: data.period.trim(), water_previous: Number(data.water_previous),
-    water_current: Number(data.water_current), water_usage: waterUsage,
-    electricity_previous: Number(data.electricity_previous), electricity_current: Number(data.electricity_current),
-    electricity_usage: electricityUsage, water_rate: Number(state.settings.water_rate),
-    electricity_total_bill: Number(state.settings.electricity_total_bill),
-    electricity_total_usage: Number(state.settings.electricity_total_usage),
-    electricity_rate: electricityUnitRate, electricity_charge: Math.round(electricityCharge * 100) / 100,
-    water_charge: Math.round(waterCharge * 100) / 100, amount,
-  };
+  const saveButton = document.querySelector('[data-action="save-utility"]');
+  if (saveButton?.disabled) return;
+  if (saveButton) {
+    saveButton.disabled = true;
+    saveButton.textContent = "Saving...";
+  }
   try {
-    {
-      const { data: payment, error: paymentError } = await supabase.from("payments").insert({
-        renter_id: bill.renter_id, period: `${bill.period} · Utilities`, due_date: new Date().toISOString().slice(0, 10),
-        base_amount: 0, utility_amount: amount, amount, status: "pending",
-      }).select().single();
-      if (paymentError) throw paymentError;
-      bill.payment_id = payment.id;
-      const { data: inserted, error } = await supabase.from("utility_bills").insert(bill).select().single();
-      if (error) throw error;
-      state.utility_bills.unshift(inserted);
-      state.payments.unshift(payment);
-    }
+    const { error } = await supabase.rpc("admin_create_utility_bill", {
+      p_renter_id: data.renter_id,
+      p_period: data.period.trim(),
+      p_due_date: new Date().toISOString().slice(0, 10),
+      p_water_previous: Number(data.water_previous),
+      p_water_current: Number(data.water_current),
+      p_electricity_previous: Number(data.electricity_previous),
+      p_electricity_current: Number(data.electricity_current),
+    });
+    if (error) throw error;
     document.querySelector(".modal-backdrop")?.remove();
+    try {
+      await fetchCloudData();
+    } catch (refreshError) {
+      render();
+      return toast(`Utility bill was saved, but the app could not refresh: ${refreshError.message}. Reload the page to view it.`, true);
+    }
     render();
-    toast(`Utility bill calculated: ${money(amount)}.`);
-  } catch (error) { toast(error.message || "Could not save utility bill.", true); }
+    toast("Utility bill calculated and saved to payment history.");
+  } catch (error) {
+    toast(error.message || "Could not save utility bill.", true);
+  } finally {
+    if (saveButton?.isConnected) {
+      saveButton.disabled = false;
+      saveButton.textContent = "Save utility charge";
+    }
+  }
 }
-async function saveRates() {
+async function saveRates({ renderPage = true, successToast = true } = {}) {
   const inputs = [...document.querySelectorAll("[data-setting]")];
   const values = Object.fromEntries(inputs.map((input) => [input.dataset.setting, Number(input.value)]));
-  if (inputs.some((input) => !Number.isFinite(Number(input.value)) || Number(input.value) < 0)) return toast("Rates and fees must be zero or greater.", true);
-  if (!(values.electricity_total_bill > 0) || !(values.electricity_total_usage > 0)) {
-    return toast("Enter a total electricity bill and total kWh greater than zero.", true);
+  if (inputs.some((input) => !Number.isFinite(Number(input.value)) || Number(input.value) < 0)) {
+    toast("Rates and fees must be zero or greater.", true);
+    return false;
   }
-  values.electricity_rate = values.electricity_total_bill / values.electricity_total_usage;
+  if (!(values.electricity_total_bill > 0) || !(values.electricity_total_usage > 0)) {
+    toast("Enter a total electricity bill and total kWh greater than zero.", true);
+    return false;
+  }
+  values.electricity_rate = Math.round((values.electricity_total_bill / values.electricity_total_usage) * 100000000) / 100000000;
   try {
     const { error } = await supabase.from("settings").upsert(Object.entries(values).map(([key, value]) => ({ key, value })), { onConflict: "key" });
     if (error) throw error;
     state.settings = { ...state.settings, ...values };
-    render();
-    toast("Utility rates and late fee policy saved.");
-  } catch (error) { toast(error.message || "Could not save settings.", true); }
+    if (renderPage) render();
+    if (successToast) toast("Utility rates and late fee policy saved.");
+    return true;
+  } catch (error) {
+    toast(error.message || "Could not save settings.", true);
+    return false;
+  }
 }
 async function markPaid(id) {
   try {
@@ -566,10 +764,17 @@ document.addEventListener("click", async (event) => {
     return toast("If an account exists for that address, password reset instructions have been sent.");
   }
   if (action === "add-renter") return addRenterModal();
+  if (action === "edit-lease") return editLeaseModal(id);
+  if (action === "save-lease") return saveLease();
+  if (action === "terminate-lease") return terminateLeaseModal(id);
+  if (action === "confirm-termination") return terminateLease();
+  if (action === "renter-documents") return renterDocumentsModal(id);
+  if (action === "view-renter-document") return viewRenterDocument(id, target.dataset.kind);
+  if (action === "lease-history") return leaseHistoryModal(id);
   if (action === "change-renter-password") return changeRenterPasswordModal(id);
   if (action === "save-renter-password") return changeRenterPassword(document.querySelector("#renter-password-form")?.dataset.renterId);
-  if (action === "add-payment") return state.renters.length ? addPaymentModal() : toast("Add a renter before creating a charge.", true);
-  if (action === "add-utility") return addUtilityModal();
+  if (action === "add-payment") return activeRenters().length ? addPaymentModal() : toast("Add an active renter before creating a charge.", true);
+  if (action === "add-utility") return startUtilityFlow();
   if (action === "close-modal") return document.querySelector(".modal-backdrop")?.remove();
   if (action === "save-renter") return saveRenter();
   if (action === "save-payment") return savePayment();
@@ -583,6 +788,15 @@ document.addEventListener("click", async (event) => {
     input.type = "file"; input.accept = "image/*,.pdf";
     input.onchange = () => uploadReceipt(id, input.files?.[0]);
     input.click();
+  }
+});
+document.addEventListener("change", (event) => {
+  const input = event.target.closest("[data-renter-document]");
+  if (input) uploadRenterDocument(input.dataset.id, input.dataset.renterDocument, input.files?.[0]);
+});
+document.addEventListener("input", (event) => {
+  if (event.target.matches('[data-setting="electricity_total_bill"], [data-setting="electricity_total_usage"]')) {
+    updateElectricityRatePreview();
   }
 });
 document.addEventListener("submit", async (event) => {

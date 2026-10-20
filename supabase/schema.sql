@@ -5,8 +5,12 @@ create table if not exists public.profiles (
   full_name text not null default '',
   phone text not null default '',
   role text not null default 'renter' check (role in ('admin', 'renter')),
+  account_enabled boolean not null default true,
   created_at timestamptz not null default now()
 );
+
+alter table public.profiles
+  add column if not exists account_enabled boolean not null default true;
 
 create table if not exists public.renters (
   id uuid primary key default gen_random_uuid(),
@@ -20,6 +24,42 @@ create table if not exists public.renters (
   contract_start date not null,
   contract_end date not null,
   rent_amount numeric(12,2) not null check (rent_amount >= 0),
+  status text not null default 'active' check (status in ('active', 'terminated')),
+  terminated_at timestamptz,
+  termination_reason text,
+  id_image_path text,
+  contract_image_path text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.renters
+  add column if not exists status text not null default 'active',
+  add column if not exists terminated_at timestamptz,
+  add column if not exists termination_reason text,
+  add column if not exists id_image_path text,
+  add column if not exists contract_image_path text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.renters'::regclass
+      and conname = 'renters_status_check'
+  ) then
+    alter table public.renters
+      add constraint renters_status_check check (status in ('active', 'terminated'));
+  end if;
+end;
+$$;
+
+create table if not exists public.lease_changes (
+  id uuid primary key default gen_random_uuid(),
+  renter_id uuid not null references public.renters(id) on delete restrict,
+  changed_by uuid not null references auth.users(id),
+  action text not null check (action in ('lease_updated', 'lease_terminated')),
+  reason text not null check (length(trim(reason)) > 0),
+  previous_details jsonb not null,
+  new_details jsonb not null,
   created_at timestamptz not null default now()
 );
 
@@ -51,7 +91,7 @@ create table if not exists public.utility_bills (
   electricity_total_bill numeric(12,2) not null default 0 check (electricity_total_bill >= 0),
   electricity_total_usage numeric(12,2) not null default 0 check (electricity_total_usage >= 0),
   water_rate numeric(12,2) not null check (water_rate >= 0),
-  electricity_rate numeric(12,4) not null check (electricity_rate >= 0),
+  electricity_rate numeric(16,8) not null check (electricity_rate >= 0),
   water_charge numeric(12,2) not null default 0 check (water_charge >= 0),
   electricity_charge numeric(12,2) not null default 0 check (electricity_charge >= 0),
   amount numeric(12,2) not null check (amount >= 0),
@@ -65,7 +105,15 @@ alter table public.utility_bills
   add column if not exists electricity_charge numeric(12,2) not null default 0 check (electricity_charge >= 0);
 
 alter table public.utility_bills
-  alter column electricity_rate type numeric(12,4);
+  alter column electricity_rate type numeric(16,8);
+
+alter table public.utility_bills
+  drop constraint if exists utility_bills_electricity_current_check,
+  drop constraint if exists utility_bills_electricity_readings_nonnegative;
+
+alter table public.utility_bills
+  add constraint utility_bills_electricity_readings_nonnegative
+  check (electricity_previous >= 0 and electricity_current >= 0);
 
 create table if not exists public.settings (
   key text primary key,
@@ -80,6 +128,235 @@ insert into public.settings (key, value) values
   ('late_fee_per_day', '50'::jsonb),
   ('grace_period_days', '3'::jsonb)
 on conflict (key) do nothing;
+
+create or replace function public.admin_update_lease(
+  p_renter_id uuid,
+  p_unit_name text,
+  p_rental_type text,
+  p_contract_months integer,
+  p_contract_start date,
+  p_contract_end date,
+  p_rent_amount numeric,
+  p_reason text
+)
+returns public.renters
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  current_renter public.renters;
+  updated_renter public.renters;
+begin
+  if not public.is_admin() then
+    raise exception 'Administrator access is required.';
+  end if;
+  if p_reason is null or length(trim(p_reason)) < 3 then
+    raise exception 'A reason of at least 3 characters is required.';
+  end if;
+  if p_unit_name is null or length(trim(p_unit_name)) = 0
+    or p_rental_type is null or p_rental_type not in ('Room', 'House', 'Apartment')
+    or p_contract_months is null or p_contract_months not in (6, 12)
+    or p_contract_start is null or p_contract_end is null or p_contract_end < p_contract_start
+    or p_rent_amount is null or p_rent_amount < 0 then
+    raise exception 'Lease details are invalid.';
+  end if;
+
+  select * into current_renter
+  from public.renters
+  where id = p_renter_id
+  for update;
+  if not found then
+    raise exception 'Renter not found.';
+  end if;
+  if current_renter.status <> 'active' then
+    raise exception 'Terminated leases cannot be edited.';
+  end if;
+
+  update public.renters
+  set unit_name = trim(p_unit_name),
+      rental_type = p_rental_type,
+      contract_months = p_contract_months,
+      contract_start = p_contract_start,
+      contract_end = p_contract_end,
+      rent_amount = p_rent_amount
+  where id = p_renter_id
+  returning * into updated_renter;
+
+  insert into public.lease_changes (
+    renter_id, changed_by, action, reason, previous_details, new_details
+  ) values (
+    p_renter_id, auth.uid(), 'lease_updated', trim(p_reason),
+    jsonb_build_object(
+      'unit_name', current_renter.unit_name,
+      'rental_type', current_renter.rental_type,
+      'contract_months', current_renter.contract_months,
+      'contract_start', current_renter.contract_start,
+      'contract_end', current_renter.contract_end,
+      'rent_amount', current_renter.rent_amount
+    ),
+    jsonb_build_object(
+      'unit_name', updated_renter.unit_name,
+      'rental_type', updated_renter.rental_type,
+      'contract_months', updated_renter.contract_months,
+      'contract_start', updated_renter.contract_start,
+      'contract_end', updated_renter.contract_end,
+      'rent_amount', updated_renter.rent_amount
+    )
+  );
+  return updated_renter;
+end;
+$$;
+
+create or replace function public.admin_terminate_lease(
+  p_renter_id uuid,
+  p_reason text
+)
+returns public.renters
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  current_renter public.renters;
+  updated_renter public.renters;
+begin
+  if not public.is_admin() then
+    raise exception 'Administrator access is required.';
+  end if;
+  if p_reason is null or length(trim(p_reason)) < 3 then
+    raise exception 'A reason of at least 3 characters is required.';
+  end if;
+
+  select * into current_renter
+  from public.renters
+  where id = p_renter_id
+  for update;
+  if not found then
+    raise exception 'Renter not found.';
+  end if;
+  if current_renter.status <> 'active' then
+    raise exception 'This lease is already terminated.';
+  end if;
+
+  update public.renters
+  set status = 'terminated',
+      terminated_at = now(),
+      termination_reason = trim(p_reason)
+  where id = p_renter_id
+  returning * into updated_renter;
+
+  if current_renter.user_id is not null then
+    update public.profiles
+    set account_enabled = false
+    where id = current_renter.user_id;
+  end if;
+
+  insert into public.lease_changes (
+    renter_id, changed_by, action, reason, previous_details, new_details
+  ) values (
+    p_renter_id, auth.uid(), 'lease_terminated', trim(p_reason),
+    jsonb_build_object(
+      'status', current_renter.status,
+      'rent_amount', current_renter.rent_amount,
+      'contract_end', current_renter.contract_end
+    ),
+    jsonb_build_object(
+      'status', updated_renter.status,
+      'terminated_at', updated_renter.terminated_at,
+      'termination_reason', updated_renter.termination_reason
+    )
+  );
+  return updated_renter;
+end;
+$$;
+
+create or replace function public.admin_create_utility_bill(
+  p_renter_id uuid,
+  p_period text,
+  p_due_date date,
+  p_water_previous numeric,
+  p_water_current numeric,
+  p_electricity_previous numeric,
+  p_electricity_current numeric
+)
+returns public.utility_bills
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  renter_status text;
+  provider_bill numeric;
+  provider_usage numeric;
+  water_rate_value numeric;
+  electricity_rate_value numeric;
+  water_usage_value numeric;
+  electricity_usage_value numeric;
+  water_charge_value numeric;
+  electricity_charge_value numeric;
+  total_charge numeric;
+  new_payment_id uuid;
+  new_utility_bill public.utility_bills;
+begin
+  if not public.is_admin() then
+    raise exception 'Administrator access is required.';
+  end if;
+  if p_period is null or length(trim(p_period)) = 0 or p_due_date is null
+    or p_water_previous is null or p_water_current is null
+    or p_electricity_previous is null or p_electricity_current is null
+    or p_water_previous < 0 or p_water_current < p_water_previous
+    or p_electricity_previous < 0 or p_electricity_current < 0 then
+    raise exception 'Billing period and meter readings are invalid.';
+  end if;
+
+  select status into renter_status
+  from public.renters
+  where id = p_renter_id;
+  if not found or renter_status <> 'active' then
+    raise exception 'Choose an active renter for this utility bill.';
+  end if;
+
+  select (select value #>> '{}' from public.settings where key = 'electricity_total_bill')::numeric,
+         (select value #>> '{}' from public.settings where key = 'electricity_total_usage')::numeric,
+         (select value #>> '{}' from public.settings where key = 'water_rate')::numeric
+  into provider_bill, provider_usage, water_rate_value;
+  if provider_bill is null or provider_usage is null or provider_usage <= 0
+    or provider_bill <= 0 or water_rate_value is null or water_rate_value < 0 then
+    raise exception 'Save the current provider bill, total kWh, and water rate before calculating a utility bill.';
+  end if;
+
+  electricity_rate_value := round(provider_bill / provider_usage, 8);
+  water_usage_value := p_water_current - p_water_previous;
+  electricity_usage_value := greatest(p_electricity_current, p_electricity_previous)
+                              - least(p_electricity_current, p_electricity_previous);
+  water_charge_value := round(water_usage_value * water_rate_value, 2);
+  electricity_charge_value := round(electricity_usage_value * electricity_rate_value, 2);
+  total_charge := round(water_charge_value + electricity_charge_value, 2);
+
+  insert into public.payments (
+    renter_id, period, due_date, base_amount, utility_amount, amount, status
+  ) values (
+    p_renter_id, trim(p_period) || ' · Utilities', p_due_date, 0, total_charge, total_charge, 'pending'
+  )
+  returning id into new_payment_id;
+
+  insert into public.utility_bills (
+    renter_id, payment_id, period, water_previous, water_current, water_usage,
+    electricity_previous, electricity_current, electricity_usage,
+    electricity_total_bill, electricity_total_usage, water_rate, electricity_rate,
+    water_charge, electricity_charge, amount
+  ) values (
+    p_renter_id, new_payment_id, trim(p_period), p_water_previous, p_water_current, water_usage_value,
+    p_electricity_previous, p_electricity_current, electricity_usage_value,
+    provider_bill, provider_usage, water_rate_value, electricity_rate_value,
+    water_charge_value, electricity_charge_value, total_charge
+  )
+  returning * into new_utility_bill;
+
+  return new_utility_bill;
+end;
+$$;
 
 create or replace function public.handle_new_user()
 returns trigger
@@ -157,6 +434,7 @@ create trigger guard_renter_payment_update
 
 alter table public.profiles enable row level security;
 alter table public.renters enable row level security;
+alter table public.lease_changes enable row level security;
 alter table public.payments enable row level security;
 alter table public.utility_bills enable row level security;
 alter table public.settings enable row level security;
@@ -175,11 +453,20 @@ create policy "Admins manage profiles"
 drop policy if exists "Renters can read their own profile record" on public.renters;
 create policy "Renters can read their own profile record"
   on public.renters for select to authenticated
-  using (user_id = (select auth.uid()) or (select public.is_admin()));
+  using (
+    (select public.is_admin())
+    or (user_id = (select auth.uid()) and status = 'active')
+  );
 
 drop policy if exists "Admins manage renters" on public.renters;
 create policy "Admins manage renters"
   on public.renters for all to authenticated
+  using ((select public.is_admin()))
+  with check ((select public.is_admin()));
+
+drop policy if exists "Admins manage lease change history" on public.lease_changes;
+create policy "Admins manage lease change history"
+  on public.lease_changes for all to authenticated
   using ((select public.is_admin()))
   with check ((select public.is_admin()));
 
@@ -190,7 +477,11 @@ create policy "Renters read their own payments"
     (select public.is_admin())
     or exists (
       select 1 from public.renters r
-      where r.id = payments.renter_id and r.user_id = (select auth.uid())
+      join public.profiles pr on pr.id = r.user_id
+      where r.id = payments.renter_id
+        and r.user_id = (select auth.uid())
+        and r.status = 'active'
+        and pr.account_enabled
     )
   );
 
@@ -206,7 +497,11 @@ create policy "Renters submit payment receipts"
   using (
     status <> 'paid' and exists (
       select 1 from public.renters r
-      where r.id = payments.renter_id and r.user_id = (select auth.uid())
+      join public.profiles pr on pr.id = r.user_id
+      where r.id = payments.renter_id
+        and r.user_id = (select auth.uid())
+        and r.status = 'active'
+        and pr.account_enabled
     )
   )
   with check (
@@ -223,7 +518,11 @@ create policy "Renters read their utility bills"
     (select public.is_admin())
     or exists (
       select 1 from public.renters r
-      where r.id = utility_bills.renter_id and r.user_id = (select auth.uid())
+      join public.profiles pr on pr.id = r.user_id
+      where r.id = utility_bills.renter_id
+        and r.user_id = (select auth.uid())
+        and r.status = 'active'
+        and pr.account_enabled
     )
   );
 
@@ -262,6 +561,11 @@ create policy "Renter uploads their own receipt"
       join public.payments p on p.renter_id = r.id
       where r.user_id = (select auth.uid())
         and p.id::text = (storage.foldername(name))[2]
+        and r.status = 'active'
+        and exists (
+          select 1 from public.profiles pr
+          where pr.id = r.user_id and pr.account_enabled
+        )
         and p.status <> 'paid'
     )
   );
@@ -272,10 +576,40 @@ create policy "Renter and admin read receipts"
   using (
     bucket_id = 'receipts'
     and (
-      (storage.foldername(name))[1] = (select auth.uid())::text
+      (
+        (storage.foldername(name))[1] = (select auth.uid())::text
+        and exists (
+          select 1 from public.renters r
+          join public.profiles pr on pr.id = r.user_id
+          join public.payments p on p.renter_id = r.id
+          where r.user_id = (select auth.uid())
+            and r.status = 'active'
+            and pr.account_enabled
+            and p.id::text = (storage.foldername(name))[2]
+        )
+      )
       or (select public.is_admin())
     )
   );
 
 revoke all on function public.is_admin() from public;
 grant execute on function public.is_admin() to authenticated;
+revoke all on function public.admin_update_lease(uuid, text, text, integer, date, date, numeric, text) from public;
+grant execute on function public.admin_update_lease(uuid, text, text, integer, date, date, numeric, text) to authenticated;
+revoke all on function public.admin_terminate_lease(uuid, text) from public;
+grant execute on function public.admin_terminate_lease(uuid, text) to authenticated;
+revoke all on function public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric, numeric) from public;
+grant execute on function public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric, numeric) to authenticated;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('renter-documents', 'renter-documents', false, 10485760, array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do update
+set public = false,
+    file_size_limit = 10485760,
+    allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp'];
+
+drop policy if exists "Admins manage renter documents" on storage.objects;
+create policy "Admins manage renter documents"
+  on storage.objects for all to authenticated
+  using (bucket_id = 'renter-documents' and (select public.is_admin()))
+  with check (bucket_id = 'renter-documents' and (select public.is_admin()));
