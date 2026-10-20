@@ -75,6 +75,24 @@ create table if not exists public.lease_changes (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.lease_renewal_requests (
+  id uuid primary key default gen_random_uuid(),
+  renter_id uuid not null references public.renters(id) on delete restrict,
+  requested_by uuid not null references auth.users(id),
+  request_message text not null default '',
+  status text not null default 'pending' check (status in ('pending', 'approved', 'declined')),
+  admin_message text,
+  responded_by uuid references auth.users(id),
+  responded_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists lease_renewal_requests_one_pending_per_renter
+  on public.lease_renewal_requests (renter_id)
+  where status = 'pending';
+
+grant select, insert, update, delete on public.lease_renewal_requests to authenticated;
+
 create table if not exists public.payments (
   id uuid primary key default gen_random_uuid(),
   renter_id uuid not null references public.renters(id) on delete cascade,
@@ -519,6 +537,7 @@ create trigger guard_renter_payment_update
 alter table public.profiles enable row level security;
 alter table public.renters enable row level security;
 alter table public.lease_changes enable row level security;
+alter table public.lease_renewal_requests enable row level security;
 alter table public.payments enable row level security;
 alter table public.utility_bills enable row level security;
 alter table public.settings enable row level security;
@@ -555,6 +574,45 @@ create policy "Admins manage lease change history"
   on public.lease_changes for all to authenticated
   using ((select public.is_admin()))
   with check ((select public.is_admin()));
+
+drop policy if exists "Admins manage lease renewal requests" on public.lease_renewal_requests;
+create policy "Admins manage lease renewal requests"
+  on public.lease_renewal_requests for all to authenticated
+  using ((select public.is_admin()))
+  with check ((select public.is_admin()));
+
+drop policy if exists "Renters read their own lease renewal requests" on public.lease_renewal_requests;
+create policy "Renters read their own lease renewal requests"
+  on public.lease_renewal_requests for select to authenticated
+  using (
+    exists (
+      select 1 from public.renters r
+      join public.profiles pr on pr.id = r.user_id
+      where r.id = lease_renewal_requests.renter_id
+        and r.user_id = (select auth.uid())
+        and r.status = 'active'
+        and pr.account_enabled
+    )
+  );
+
+drop policy if exists "Renters request renewal for their active lease" on public.lease_renewal_requests;
+create policy "Renters request renewal for their active lease"
+  on public.lease_renewal_requests for insert to authenticated
+  with check (
+    requested_by = (select auth.uid())
+    and status = 'pending'
+    and admin_message is null
+    and responded_by is null
+    and responded_at is null
+    and exists (
+      select 1 from public.renters r
+      join public.profiles pr on pr.id = r.user_id
+      where r.id = lease_renewal_requests.renter_id
+        and r.user_id = (select auth.uid())
+        and r.status = 'active'
+        and pr.account_enabled
+    )
+  );
 
 drop policy if exists "Renters read their own payments" on public.payments;
 create policy "Renters read their own payments"

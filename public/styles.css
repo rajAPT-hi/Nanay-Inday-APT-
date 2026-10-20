@@ -145,6 +145,25 @@ td { border-top: 1px solid #f0f2ef; padding: 12px 11px; font-size: 11px; white-s
 .history-field dt { color: var(--muted); font-size: 10px; }
 .history-field dd { margin: 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
 .history-empty { margin: 0; color: var(--muted); font-size: 11px; }
+.renewal-admin-card { margin: 0 0 17px; }
+.renewal-admin-card .notice { margin-bottom: 14px; }
+.renewal-request-list { display: grid; gap: 10px; }
+.renewal-request { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.renewal-request strong { font-size: 13px; }
+.renewal-request p { margin: 5px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.renewal-request small { color: var(--muted); font-size: 10px; }
+.renewal-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.renewal-renter-card { margin-bottom: 17px; }
+.renewal-renter-card .card-head { align-items: flex-start; }
+.renewal-head-actions { display: flex; align-items: center; gap: 8px; }
+.renewal-status { border-radius: 99px; padding: 6px 10px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.renewal-status.pending { background: #fff4d9; color: #9a7022; }
+.renewal-status.approved { background: #eaf4ed; color: #36734e; }
+.renewal-status.declined { background: #fff0ed; color: #ae574a; }
+.renewal-message { margin: 0 0 13px; padding: 12px; border-radius: 9px; background: var(--canvas); font-size: 12px; line-height: 1.6; }
+.renewal-message p { margin: 5px 0 0; }
+.termination-notice { display: grid; gap: 10px; padding: 15px; border: 1px solid #f0d3cf; border-radius: 10px; background: #fff7f5; color: #704239; font-size: 13px; line-height: 1.6; }
+.termination-notice p { margin: 0; }
 .login-page { min-height: 100vh; display: grid; grid-template-columns: 1fr 1fr; background: #fff; }
 .login-brand { background: #286b50; color: #fff; padding: 7vw; display: flex; flex-direction: column; justify-content: space-between; position: relative; overflow: hidden; }
 .login-brand:after { content: ""; position: absolute; width: 430px; height: 430px; border: 1px solid rgb(255 255 255 / 13%); border-radius: 50%; right: -150px; bottom: -190px; box-shadow: 0 0 0 35px rgb(255 255 255 / 4%),0 0 0 80px rgb(255 255 255 / 3%); }
@@ -265,6 +284,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @media(max-width: 620px) {
   .main { padding: 23px 16px 38px; }
   .history-snapshots { grid-template-columns: 1fr; }
+  .renewal-request { align-items: stretch; flex-direction: column; }
+  .renewal-actions { flex-wrap: wrap; }
+  .renewal-renter-card .card-head { flex-direction: column; }
   .payment-toolbar > * { flex: 1 1 100%; }
   .payment-toolbar .search { min-width: 0; }
   .nav button { font-size: 12px; }

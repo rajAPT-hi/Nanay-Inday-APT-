@@ -28,6 +28,29 @@ app.get("/api/config", (_req, res) => {
   });
 });
 
+async function requireAuthenticatedUser(req, res, next) {
+  if (!adminClient) return res.status(503).json({ error: "Cloud services are not configured." });
+  const token = req.get("authorization")?.replace(/^Bearer\s+/i, "");
+  if (!token) return res.status(401).json({ error: "Sign in is required." });
+
+  const { data: { user }, error } = await adminClient.auth.getUser(token);
+  if (error || !user) return res.status(401).json({ error: "Your session is invalid or expired." });
+  req.authenticatedUser = user;
+  next();
+}
+
+app.get("/api/account-status", requireAuthenticatedUser, async (req, res) => {
+  const { data: renter, error } = await adminClient.from("renters")
+    .select("status, termination_reason")
+    .eq("user_id", req.authenticatedUser.id)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: "Could not check your rental account status." });
+  res.json({
+    status: renter?.status || "unlinked",
+    terminationReason: renter?.termination_reason || "",
+  });
+});
+
 async function requireAdmin(req, res, next) {
   if (!adminClient) return res.status(503).json({ error: "Cloud services are not configured." });
   const token = req.get("authorization")?.replace(/^Bearer\s+/i, "");

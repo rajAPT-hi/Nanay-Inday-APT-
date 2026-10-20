@@ -17,6 +17,8 @@ let state = {
   payments: [],
   utility_bills: [],
   lease_changes: [],
+  lease_renewal_requests: [],
+  terminationNotice: null,
   settings: {
     water_rate: 45,
     electricity_rate: 0,
@@ -33,6 +35,12 @@ async function fetchCloudData() {
     .from("profiles").select("role, full_name, account_enabled").eq("id", state.user.id).single();
   if (profileError) throw profileError;
   if (!profile.account_enabled) {
+    const accountStatus = await adminRequest("/api/account-status", "GET");
+    if (accountStatus.status === "terminated") {
+      const error = new Error("Your rental contract has been terminated.");
+      error.terminationReason = accountStatus.terminationReason || "No termination reason was recorded.";
+      throw error;
+    }
     throw new Error("Your rental access has been disabled. Contact the property administrator.");
   }
   if (!["admin", "renter"].includes(profile.role)) {
@@ -50,17 +58,19 @@ async function fetchCloudData() {
     profile.role === "admin"
       ? supabase.from("lease_changes").select("*").order("created_at", { ascending: false })
       : Promise.resolve({ data: [], error: null }),
+    supabase.from("lease_renewal_requests").select("*").order("created_at", { ascending: false }),
   ]);
   for (const result of results) {
     if (result.error) throw result.error;
   }
-  const [renters, payments, utilities, settings, leaseChanges] = results;
+  const [renters, payments, utilities, settings, leaseChanges, renewalRequests] = results;
   state.role = profile.role;
   state.user.name = profile.full_name || state.user.email;
   state.renters = renters.data;
   state.payments = payments.data;
   state.utility_bills = utilities.data;
   state.lease_changes = leaseChanges.data;
+  state.lease_renewal_requests = renewalRequests.data;
   state.settings = {
     ...state.settings,
     ...Object.fromEntries(settings.data.map((row) => [row.key, Number(row.value)])),
@@ -196,6 +206,7 @@ function overviewPage() {
       <div class="stat"><div class="stat-head"><span>Outstanding balance</span><span class="stat-icon">◷</span></div><strong>${money(overdueTotal)}</strong><small>Includes calculated late fees</small></div>
       <div class="stat"><div class="stat-head"><span>Contracts expiring</span><span class="stat-icon">▣</span></div><strong>${expiringRenters.length}</strong><small>Within the next 30 days</small></div>
     </section>
+    ${renewalRequestsAdminPanel()}
     <section class="grid-two">
       <div class="card"><div class="card-head"><h3>Recent renters</h3><button class="text-button" data-tab="renters">View all →</button></div>${renderRenterTable(state.renters.slice(0, 5))}</div>
       <div class="card"><div class="card-head"><h3>Contracts to watch</h3><span class="status-pill">Next 30 days</span></div>
@@ -266,8 +277,19 @@ function renderRenterTable(renters) {
 }
 function rentersPage() {
   return `<div class="section-title"><div><p>Manage lease terms, record the reason for changes, terminate leases, and securely store renter documents.</p></div></div>
+    ${renewalRequestsAdminPanel()}
     <div class="toolbar"><input class="search" id="renter-search" placeholder="⌕  Search renters, units, or locations..." /><select class="filter" id="renter-filter"><option value="all">All rental types</option><option>Room</option><option>House</option><option>Apartment</option></select><select class="filter" id="renter-location-filter"><option value="all">All locations</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag"].map((location) => `<option>${location}</option>`).join("")}</select></div>
     <div class="card" id="renter-table">${renderRenterTable(state.renters)}</div>`;
+}
+function renewalRequestsAdminPanel() {
+  const pending = state.lease_renewal_requests.filter((request) => request.status === "pending");
+  if (!pending.length) return "";
+  return `<section class="card renewal-admin-card"><div class="card-head"><div><h3>Lease renewal requests</h3><p class="muted-note">${pending.length} request${pending.length === 1 ? "" : "s"} waiting for your decision.</p></div><button class="button secondary" data-action="refresh-renewal-requests">Refresh</button></div>
+    <p class="notice">After approving a request, update the lease dates and terms from the renter's Edit lease action to record the agreed renewal.</p>
+    <div class="renewal-request-list">${pending.map((request) => {
+      const renter = renterById(request.renter_id);
+      return `<article class="renewal-request"><div><strong>${escapeHtml(renter.full_name || "Renter")}</strong><p>${escapeHtml(renter.unit_name || "")} · ${escapeHtml(renter.location || "Location not set")} · current contract ends ${formatDate(renter.contract_end)}</p>${request.request_message ? `<p><strong>Renter's note:</strong> ${escapeHtml(request.request_message)}</p>` : ""}<small>Requested ${formatDate(request.created_at)}</small></div><div class="renewal-actions"><button class="button primary" data-action="respond-renewal-request" data-id="${escapeHtml(request.id)}" data-status="approved">Approve</button><button class="button secondary" data-action="respond-renewal-request" data-id="${escapeHtml(request.id)}" data-status="declined">Decline</button></div></article>`;
+    }).join("")}</div></section>`;
 }
 function paymentsPage() {
   const payments = [...state.payments].sort((a, b) => new Date(b.due_date) - new Date(a.due_date));
@@ -391,12 +413,18 @@ function renterPage() {
   const payments = state.payments.filter((payment) => payment.renter_id === renter.id);
   const outstanding = payments.filter((p) => p.status !== "paid").reduce((t, p) => t + Number(p.amount) + lateFee(p), 0);
   const proofUploadPayments = payments.filter((payment) => payment.status !== "paid" && !payment.receipt_path);
+  const renewalRequests = state.lease_renewal_requests.filter((request) => request.renter_id === renter.id);
+  const latestRenewalRequest = renewalRequests[0];
   return `<section class="welcome renter-hero"><div><h2>Welcome, ${escapeHtml(renter.full_name.split(" ")[0])} 👋</h2><p>Your home at ${escapeHtml(renter.unit_name)} · ${escapeHtml(renter.rental_type)} · ${escapeHtml(renter.location || "Location not set")}</p></div><span class="status-pill">Contract ends ${formatDate(renter.contract_end)}</span></section>
     <section class="renter-bill">
       <div class="bill-line"><span>Monthly rent</span><strong>${money(renter.rent_amount)}</strong></div>
       <div class="bill-line"><span>Rent due each month</span><strong>${dayLabel(renter.rent_due_day)}</strong></div>
       <div class="bill-line"><span>Outstanding balance</span><strong>${money(outstanding)}</strong></div>
       <div class="bill-line"><span>Contract term</span><strong>${renter.contract_months} months</strong></div>
+    </section>
+    <section class="card renewal-renter-card"><div class="card-head"><div><h3>Contract renewal</h3><p class="muted-note">Send a renewal request to the administrator for review.</p></div><div class="renewal-head-actions">${latestRenewalRequest ? `<button class="button secondary" data-action="refresh-renewal-requests">Refresh</button>` : ""}${latestRenewalRequest?.status === "pending" ? `<span class="renewal-status pending">Waiting for admin</span>` : latestRenewalRequest?.status === "approved" ? `<span class="renewal-status approved">Request approved</span>` : latestRenewalRequest?.status === "declined" ? `<span class="renewal-status declined">Request declined</span>` : ""}</div></div>
+      ${latestRenewalRequest?.status === "pending" ? `<p class="renewal-message">Your renewal request was sent on ${formatDate(latestRenewalRequest.created_at)}. Please wait for the administrator to respond.</p>` : latestRenewalRequest ? `<div class="renewal-message"><strong>Administrator's message:</strong><p>${escapeHtml(latestRenewalRequest.admin_message || (latestRenewalRequest.status === "approved" ? "Your renewal request was approved. Please contact the administrator to finalize the updated contract terms." : "Your renewal request was declined. Contact the administrator if you need help."))}</p></div>` : ""}
+      ${latestRenewalRequest?.status !== "pending" ? `<button class="button primary" data-action="request-lease-renewal" data-id="${escapeHtml(renter.id)}">${latestRenewalRequest ? "Request renewal again" : "Request contract renewal"}</button>` : ""}
     </section>
     <div class="card" style="margin-bottom:17px"><div class="card-head"><div><h3>Upload online payment proof</h3><p class="muted-note">For an online transfer, upload its receipt or screenshot so the administrator can review it.</p></div></div>
       ${proofUploadPayments.length ? proofUploadPayments.map((payment) => `<div class="bill-line"><span>${escapeHtml(payment.period)} · Due ${formatDate(payment.due_date)} · ${money(Number(payment.amount) + lateFee(payment))}</span><button class="button secondary" data-action="upload-receipt" data-id="${escapeHtml(payment.id)}">Choose proof file</button></div>`).join("") : `<p class="muted-note">There are no unpaid charges waiting for proof right now.</p>`}
@@ -417,6 +445,10 @@ function render() {
     app.innerHTML = `<div class="login-page"><section class="login-brand"><div class="brand"><div class="brand-mark" style="background:#fff;color:#286b50">⌂</div><div><strong>Nanay Inday's</strong><small style="color:#dbe9df">HOME & ROOM RENTALS</small></div></div><div><h1>A little more peace of mind, right at home.</h1><p>Manage your renters, monthly payments, and home utilities in one simple place.</p></div><small style="color:#dbe9df;z-index:1">A welcoming home starts with thoughtful management.</small></section>
       <section class="login-box"><h2>Welcome home</h2><p>Sign in to your rental account.</p><form id="login-form"><div class="field"><label>Email address</label><input name="email" type="email" autocomplete="username" placeholder="you@example.com" required /></div><div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required /></div><button class="button primary" type="submit" ${supabase ? "" : "disabled"}>Sign in</button><div id="login-error" class="${state.loginMessage || !supabase ? "notice" : ""}">${escapeHtml(state.loginMessage || (!supabase ? "Cloud sign-in is not configured. Check the Render Supabase environment variables." : ""))}</div><button class="text-button" style="margin-top:13px" type="button" data-action="reset-password">Forgot your password?</button></form>
       <p style="margin-top:20px;font-size:12px;line-height:1.6">Sign in with an account provided by your property administrator.</p></section></div>`;
+    if (state.terminationNotice) {
+      modal("Lease contract terminated", `<div class="termination-notice"><p>Your renter account has been terminated and you cannot access the rental portal.</p><p><strong>Reason:</strong> ${escapeHtml(state.terminationNotice)}</p><p>Please contact the property administrator for support.</p></div>`,
+        `<button class="button primary" data-action="dismiss-termination-notice">Close</button>`);
+    }
     return;
   }
   const content = state.tab === "overview" ? overviewPage()
@@ -570,6 +602,100 @@ function leaseHistoryModal(renterId) {
     ? `<div class="history-list">${entries.map((entry) => `<article class="history-entry"><div class="history-entry-head"><strong>${entry.action === "lease_terminated" ? "Lease terminated" : "Lease updated"}</strong><time>${formatDate(entry.created_at)}</time></div><p><strong>Reason:</strong> ${escapeHtml(entry.reason || "No reason recorded")}</p><details><summary>Before and after</summary><div class="history-snapshots"><section class="history-snapshot"><h4>Before</h4>${details(entry.previous_details)}</section><section class="history-snapshot"><h4>After</h4>${details(entry.new_details)}</section></div></details></article>`).join("")}</div>`
     : `<div class="empty">No lease changes have been recorded for this renter.</div>`,
   `<button class="button secondary" data-action="close-modal">Close</button>`);
+}
+function requestLeaseRenewalModal(renterId) {
+  const renter = renterById(renterId);
+  const hasPending = state.lease_renewal_requests.some((request) => request.renter_id === renterId && request.status === "pending");
+  if (!renter.id || renter.status !== "active") return toast("Only active renters can request a contract renewal.", true);
+  if (hasPending) return toast("Your renewal request is already waiting for an administrator.", true);
+  modal("Request contract renewal", `<p class="muted-note">Your request will be sent to the administrator. Your current contract remains unchanged until the administrator reviews and updates it.</p><form id="renewal-request-form" data-renter-id="${escapeHtml(renterId)}"><div class="field" style="margin-top:14px"><label>Message to the administrator (optional)</label><textarea name="request_message" maxlength="1000" placeholder="Add any details about your renewal request"></textarea></div></form>`,
+    `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="submit-renewal-request">Send request</button>`);
+}
+async function submitLeaseRenewalRequest() {
+  const form = document.querySelector("#renewal-request-form");
+  const renterId = form?.dataset.renterId;
+  if (!form || !renterId) return toast("Renewal request form is unavailable. Please try again.", true);
+  const submitButton = document.querySelector('[data-action="submit-renewal-request"]');
+  if (submitButton?.disabled) return;
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "Sending...";
+  }
+  try {
+    const requestMessage = new FormData(form).get("request_message").trim();
+    const { data: request, error } = await supabase.from("lease_renewal_requests").insert({
+      renter_id: renterId,
+      requested_by: state.user.id,
+      request_message: requestMessage,
+    }).select("*").single();
+    if (error) {
+      if (error.code === "23505") throw new Error("Your renewal request is already waiting for an administrator.");
+      throw error;
+    }
+    state.lease_renewal_requests.unshift(request);
+    document.querySelector(".modal-backdrop")?.remove();
+    render();
+    toast("Renewal request sent. You can see the administrator's response here.");
+  } catch (error) {
+    toast(error.message || "Could not send the renewal request.", true);
+  } finally {
+    if (submitButton?.isConnected) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Send request";
+    }
+  }
+}
+async function refreshLeaseRenewalRequests() {
+  const { data, error } = await supabase.from("lease_renewal_requests").select("*").order("created_at", { ascending: false });
+  if (error) return toast(error.message || "Could not refresh renewal requests.", true);
+  state.lease_renewal_requests = data;
+  render();
+  toast("Lease renewal requests refreshed.");
+}
+function respondLeaseRenewalModal(requestId, status) {
+  if (state.role !== "admin" || !["approved", "declined"].includes(status)) return;
+  const request = state.lease_renewal_requests.find((item) => item.id === requestId && item.status === "pending");
+  if (!request) return toast("This renewal request has already been answered. Refresh the page.", true);
+  const renter = renterById(request.renter_id);
+  const decision = status === "approved" ? "Approve" : "Decline";
+  modal(`${decision} renewal request`, `<p class="muted-note">${escapeHtml(renter.full_name || "Renter")} · current contract ends ${formatDate(renter.contract_end)}${request.request_message ? `<br>Renter's note: ${escapeHtml(request.request_message)}` : ""}</p>${status === "approved" ? '<p class="notice">After approving, update the lease dates and terms using Edit lease so the new agreement is recorded.</p>' : ""}<form id="renewal-response-form" data-request-id="${escapeHtml(requestId)}" data-status="${status}"><div class="field" style="margin-top:14px"><label>Message to the renter</label><textarea name="admin_message" minlength="3" maxlength="1000" placeholder="${status === "approved" ? "Explain the next steps to finalize the renewal" : "Explain the decision or next steps"}" required></textarea></div></form>`,
+    `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button ${status === "approved" ? "primary" : "danger"}" data-action="save-renewal-response">${decision}</button>`);
+}
+async function saveLeaseRenewalResponse() {
+  const form = document.querySelector("#renewal-response-form");
+  if (!form || !form.reportValidity()) return;
+  const requestId = form.dataset.requestId;
+  const status = form.dataset.status;
+  const adminMessage = new FormData(form).get("admin_message").trim();
+  if (adminMessage.length < 3) return toast("Enter a message of at least 3 characters.", true);
+  const button = document.querySelector('[data-action="save-renewal-response"]');
+  if (button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Saving...";
+  }
+  try {
+    const { data: updated, error } = await supabase.from("lease_renewal_requests").update({
+      status,
+      admin_message: adminMessage,
+      responded_by: state.user.id,
+      responded_at: new Date().toISOString(),
+    }).eq("id", requestId).eq("status", "pending").select("*").maybeSingle();
+    if (error) throw error;
+    if (!updated) throw new Error("This request was already answered. Refresh the page to see the latest status.");
+    const index = state.lease_renewal_requests.findIndex((request) => request.id === requestId);
+    if (index !== -1) state.lease_renewal_requests[index] = updated;
+    document.querySelector(".modal-backdrop")?.remove();
+    render();
+    toast(`Renewal request ${status}. The renter can now see your message.`);
+  } catch (error) {
+    toast(error.message || "Could not save the renewal decision.", true);
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = status === "approved" ? "Approve" : "Decline";
+    }
+  }
 }
 async function saveLease() {
   const form = document.querySelector("#lease-form");
@@ -1163,6 +1289,7 @@ document.addEventListener("click", async (event) => {
     state.user = null;
     state.role = null;
     state.loginMessage = "";
+    state.terminationNotice = null;
     render();
     return;
   }
@@ -1179,6 +1306,16 @@ document.addEventListener("click", async (event) => {
   if (action === "save-lease") return saveLease();
   if (action === "terminate-lease") return terminateLeaseModal(id);
   if (action === "confirm-termination") return terminateLease();
+  if (action === "request-lease-renewal") return requestLeaseRenewalModal(id);
+  if (action === "submit-renewal-request") return submitLeaseRenewalRequest();
+  if (action === "refresh-renewal-requests") return refreshLeaseRenewalRequests();
+  if (action === "respond-renewal-request") return respondLeaseRenewalModal(id, target.dataset.status);
+  if (action === "save-renewal-response") return saveLeaseRenewalResponse();
+  if (action === "dismiss-termination-notice") {
+    state.terminationNotice = null;
+    document.querySelector(".modal-backdrop")?.remove();
+    return;
+  }
   if (action === "renter-documents") return renterDocumentsModal(id);
   if (action === "view-renter-document") return viewRenterDocument(id, target.dataset.kind);
   if (action === "lease-history") return leaseHistoryModal(id);
@@ -1265,15 +1402,15 @@ document.addEventListener("submit", async (event) => {
     await fetchCloudData();
     state.tab = "overview";
     state.loginMessage = "";
+    state.terminationNotice = null;
     render();
   } catch (error) {
     if (supabase) await supabase.auth.signOut();
     state.user = null;
     state.role = null;
     state.loginMessage = error.message || "Could not sign in.";
-    const target = document.querySelector("#login-error");
-    target.className = "notice";
-    target.textContent = state.loginMessage;
+    state.terminationNotice = error.terminationReason || null;
+    render();
   } finally {
     if (button.isConnected) { button.disabled = false; button.textContent = "Sign in"; }
   }
@@ -1319,6 +1456,7 @@ if (supabase) {
       state.user = null;
       state.role = null;
       state.loginMessage = loadError.message || "Could not load your account.";
+      state.terminationNotice = loadError.terminationReason || null;
     }
   }
 }
