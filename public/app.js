@@ -539,9 +539,35 @@ function renterDocumentsModal(renterId) {
 function leaseHistoryModal(renterId) {
   const renter = renterById(renterId);
   const entries = state.lease_changes.filter((entry) => entry.renter_id === renterId);
-  const details = (value) => `<pre class="history-details">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+  const fieldLabels = {
+    unit_name: "Unit",
+    location: "Location",
+    rental_type: "Rental type",
+    contract_months: "Contract term",
+    contract_start: "Contract start",
+    contract_end: "Contract end",
+    rent_amount: "Monthly rent",
+    rent_due_day: "Rent due day",
+    status: "Lease status",
+    terminated_at: "Terminated on",
+    termination_reason: "Termination reason",
+  };
+  const snapshotValue = (key, value) => {
+    if (value === null || value === undefined || value === "") return "Not set";
+    if (key === "rent_amount") return money(value);
+    if (key === "contract_start" || key === "contract_end" || key === "terminated_at") return formatDate(value);
+    if (key === "rent_due_day") return `${dayLabel(value)} of each month`;
+    if (key === "contract_months") return Number(value) === 12 ? "1 year (12 months)" : `${value} months`;
+    if (key === "status") return value === "terminated" ? "Terminated" : value === "active" ? "Active" : String(value);
+    return String(value);
+  };
+  const details = (value) => {
+    const fields = value && typeof value === "object" && !Array.isArray(value) ? Object.entries(value) : [];
+    if (!fields.length) return `<p class="history-empty">No details recorded.</p>`;
+    return `<dl class="history-fields">${fields.map(([key, fieldValue]) => `<div class="history-field"><dt>${escapeHtml(fieldLabels[key] || key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()))}</dt><dd>${escapeHtml(snapshotValue(key, fieldValue))}</dd></div>`).join("")}</dl>`;
+  };
   modal(`Lease history · ${escapeHtml(renter.full_name)}`, entries.length
-    ? `<div class="history-list">${entries.map((entry) => `<article class="history-entry"><div class="history-entry-head"><strong>${entry.action === "lease_terminated" ? "Lease terminated" : "Lease updated"}</strong><time>${formatDate(entry.created_at)}</time></div><p><strong>Reason:</strong> ${escapeHtml(entry.reason)}</p><details><summary>Before and after</summary><div class="history-snapshots"><div><strong>Before</strong>${details(entry.previous_details)}</div><div><strong>After</strong>${details(entry.new_details)}</div></div></details></article>`).join("")}</div>`
+    ? `<div class="history-list">${entries.map((entry) => `<article class="history-entry"><div class="history-entry-head"><strong>${entry.action === "lease_terminated" ? "Lease terminated" : "Lease updated"}</strong><time>${formatDate(entry.created_at)}</time></div><p><strong>Reason:</strong> ${escapeHtml(entry.reason || "No reason recorded")}</p><details><summary>Before and after</summary><div class="history-snapshots"><section class="history-snapshot"><h4>Before</h4>${details(entry.previous_details)}</section><section class="history-snapshot"><h4>After</h4>${details(entry.new_details)}</section></div></details></article>`).join("")}</div>`
     : `<div class="empty">No lease changes have been recorded for this renter.</div>`,
   `<button class="button secondary" data-action="close-modal">Close</button>`);
 }

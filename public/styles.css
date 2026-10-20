@@ -137,7 +137,14 @@ td { border-top: 1px solid #f0f2ef; padding: 12px 11px; font-size: 11px; white-s
 .history-entry p { margin: 10px 0; font-size: 13px; line-height: 1.5; }
 .history-entry details summary { color: var(--green); cursor: pointer; font-size: 12px; font-weight: 700; }
 .history-snapshots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
-.history-details { overflow: auto; max-height: 220px; padding: 10px; border-radius: 8px; background: var(--canvas); font: 11px/1.5 monospace; white-space: pre-wrap; }
+.history-snapshot { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 9px; background: #fbfcfa; }
+.history-snapshot h4 { margin: 0 0 10px; font-size: 12px; color: var(--green); }
+.history-fields { display: grid; gap: 8px; margin: 0; }
+.history-field { display: grid; gap: 3px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+.history-field:last-child { padding-bottom: 0; border-bottom: 0; }
+.history-field dt { color: var(--muted); font-size: 10px; }
+.history-field dd { margin: 0; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
+.history-empty { margin: 0; color: var(--muted); font-size: 11px; }
 .login-page { min-height: 100vh; display: grid; grid-template-columns: 1fr 1fr; background: #fff; }
 .login-brand { background: #286b50; color: #fff; padding: 7vw; display: flex; flex-direction: column; justify-content: space-between; position: relative; overflow: hidden; }
 .login-brand:after { content: ""; position: absolute; width: 430px; height: 430px; border: 1px solid rgb(255 255 255 / 13%); border-radius: 50%; right: -150px; bottom: -190px; box-shadow: 0 0 0 35px rgb(255 255 255 / 4%),0 0 0 80px rgb(255 255 255 / 3%); }
@@ -257,6 +264,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 @media(max-width: 620px) {
   .main { padding: 23px 16px 38px; }
+  .history-snapshots { grid-template-columns: 1fr; }
   .payment-toolbar > * { flex: 1 1 100%; }
   .payment-toolbar .search { min-width: 0; }
   .nav button { font-size: 12px; }
