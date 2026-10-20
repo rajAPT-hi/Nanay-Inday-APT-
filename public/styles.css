@@ -86,6 +86,9 @@ td { border-top: 1px solid #f0f2ef; padding: 12px 11px; font-size: 11px; white-s
 .section-title { display: flex; justify-content: space-between; align-items: end; gap: 10px; margin-bottom: 17px; }
 .section-title p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .toolbar { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
+.payment-toolbar { flex-wrap: wrap; }
+.payment-toolbar .search { flex: 1 1 220px; }
+.payment-result-count { margin: 0 0 12px; }
 .search { border: 1px solid var(--line); border-radius: 9px; background: #fff; padding: 10px 12px; min-width: 190px; font-size: 12px; outline: none; }
 .search:focus, .field input:focus, .field select:focus { border-color: #8ab39a; box-shadow: 0 0 0 3px rgb(40 107 80 / 8%); }
 .filter { border: 1px solid var(--line); border-radius: 9px; background: #fff; padding: 10px; color: #68776e; font-size: 12px; }
@@ -254,6 +257,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 @media(max-width: 620px) {
   .main { padding: 23px 16px 38px; }
+  .payment-toolbar > * { flex: 1 1 100%; }
+  .payment-toolbar .search { min-width: 0; }
   .nav button { font-size: 12px; }
   .topbar { margin-bottom: 22px; }
   .welcome { padding: 22px; }

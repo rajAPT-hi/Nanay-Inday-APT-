@@ -26,6 +26,7 @@ let state = {
     grace_period_days: 3,
   },
 };
+const paymentFilters = { search: "", month: "all", status: "all", method: "all", location: "all", rentalType: "all" };
 
 async function fetchCloudData() {
   const { data: profile, error: profileError } = await supabase
@@ -270,16 +271,60 @@ function rentersPage() {
 }
 function paymentsPage() {
   const payments = [...state.payments].sort((a, b) => new Date(b.due_date) - new Date(a.due_date));
+  const monthOptions = [...new Set(payments.map((payment) => payment.due_date?.slice(0, 7)).filter(Boolean))].sort().reverse();
+  const locations = [...new Set(state.renters.map((renter) => renter.location).filter(Boolean))].sort();
   return `<div class="section-title"><div><p>Review receipts, track rent, and follow up on unpaid balances.</p></div></div>
-    <div class="stats">
-      <div class="stat"><div class="stat-head"><span>Collected</span><span class="stat-icon">✓</span></div><strong>${money(payments.filter((p) => p.status === "paid").reduce((t, p) => t + (Number(p.paid_amount) || Number(p.amount)), 0))}</strong><small>Payments marked paid</small></div>
-      <div class="stat"><div class="stat-head"><span>Awaiting payment</span><span class="stat-icon">◷</span></div><strong>${payments.filter((p) => p.status !== "paid").length}</strong><small>Unpaid rental charges</small></div>
-      <div class="stat"><div class="stat-head"><span>Late fees accrued</span><span class="stat-icon">₱</span></div><strong>${money(payments.reduce((t, p) => t + lateFee(p), 0))}</strong><small>After ${Number(state.settings.grace_period_days)} grace days</small></div>
-      <div class="stat"><div class="stat-head"><span>Receipt reviews</span><span class="stat-icon">▧</span></div><strong>${payments.filter((p) => p.status === "review").length}</strong><small>Awaiting admin approval</small></div>
+    <div class="toolbar payment-toolbar">
+      <input class="search" id="payment-search" type="search" value="${escapeHtml(paymentFilters.search)}" placeholder="⌕  Search renter, unit, or period..." aria-label="Search payments" />
+      <select class="filter" id="payment-month-filter" aria-label="Filter by billing month"><option value="all" ${paymentFilters.month === "all" ? "selected" : ""}>All billing months</option>${monthOptions.map((month) => {
+        const [year, monthNumber] = month.split("-").map(Number);
+        const label = new Date(year, monthNumber - 1, 1).toLocaleDateString("en-PH", { month: "long", year: "numeric" });
+        return `<option value="${month}" ${paymentFilters.month === month ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      }).join("")}</select>
+      <select class="filter" id="payment-status-filter" aria-label="Filter by payment status"><option value="all" ${paymentFilters.status === "all" ? "selected" : ""}>All statuses</option><option value="pending" ${paymentFilters.status === "pending" ? "selected" : ""}>Pending</option><option value="review" ${paymentFilters.status === "review" ? "selected" : ""}>Awaiting review</option><option value="paid" ${paymentFilters.status === "paid" ? "selected" : ""}>Paid</option></select>
+      <select class="filter" id="payment-method-filter" aria-label="Filter by payment method"><option value="all" ${paymentFilters.method === "all" ? "selected" : ""}>All methods</option><option value="cash" ${paymentFilters.method === "cash" ? "selected" : ""}>Cash</option><option value="online" ${paymentFilters.method === "online" ? "selected" : ""}>Online</option><option value="unknown" ${paymentFilters.method === "unknown" ? "selected" : ""}>Not recorded</option></select>
+      <select class="filter" id="payment-location-filter" aria-label="Filter by location"><option value="all" ${paymentFilters.location === "all" ? "selected" : ""}>All locations</option>${locations.map((location) => `<option value="${escapeHtml(location)}" ${paymentFilters.location === location ? "selected" : ""}>${escapeHtml(location)}</option>`).join("")}</select>
+      <select class="filter" id="payment-type-filter" aria-label="Filter by rental type"><option value="all" ${paymentFilters.rentalType === "all" ? "selected" : ""}>All rental types</option>${["Room", "House", "Apartment"].map((type) => `<option value="${type}" ${paymentFilters.rentalType === type ? "selected" : ""}>${type}</option>`).join("")}</select>
+      <button class="button secondary" data-action="clear-payment-filters">Clear filters</button>
     </div>
-    <div class="card"><div class="table-wrap"><table><thead><tr><th>RENTER</th><th>PERIOD</th><th>BASE RENT</th><th>UTILITIES</th><th>LATE FEE</th><th>TOTAL DUE</th><th>STATUS / RECEIPT</th><th>ACTION</th></tr></thead><tbody>
-    ${payments.length ? payments.map((payment) => `<tr><td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")}</td><td>${escapeHtml(payment.period)}</td><td>${money(payment.base_amount)}</td><td>${money(payment.utility_amount)}</td><td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td><td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td><td>${statusBadge(paymentStatus(payment))}${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" style="display:block;margin-top:5px" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print receipt</button><small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "online" ? "Online" : payment.payment_method === "cash" ? "Cash" : "Method not recorded"}${payment.received_by ? ` · Received by ${escapeHtml(payment.received_by)}` : ""}</small>` : ""}</td><td>${payment.status !== "paid" ? `<button class="text-button" data-action="mark-paid" data-id="${escapeHtml(payment.id)}">${payment.status === "review" ? "Approve & mark paid" : "Mark paid"}</button>${renterById(payment.renter_id).phone ? `<button class="text-button" data-action="sms" data-id="${escapeHtml(payment.id)}">Send SMS</button>` : ""}` : "—"}</td></tr>`).join("") : `<tr><td colspan="8"><div class="empty">No charges yet. Create a charge to track a payment.</div></td></tr>`}
-    </tbody></table></div></div>`;
+    <p class="muted-note payment-result-count" id="payment-result-count" aria-live="polite"></p>
+    <div class="stats" id="payment-stats"></div>
+    <div class="card"><div class="table-wrap"><table><thead><tr><th>RENTER</th><th>PERIOD</th><th>BASE RENT</th><th>UTILITIES</th><th>LATE FEE</th><th>TOTAL DUE</th><th>STATUS / RECEIPT</th><th>ACTION</th></tr></thead><tbody id="payment-table-body"></tbody></table></div></div>`;
+}
+function paymentStatsMarkup(payments) {
+  return `<div class="stat"><div class="stat-head"><span>Collected</span><span class="stat-icon">✓</span></div><strong>${money(payments.filter((p) => p.status === "paid").reduce((t, p) => t + (Number(p.paid_amount) || Number(p.amount)), 0))}</strong><small>Payments marked paid</small></div>
+    <div class="stat"><div class="stat-head"><span>Awaiting payment</span><span class="stat-icon">◷</span></div><strong>${payments.filter((p) => p.status !== "paid").length}</strong><small>Unpaid rental charges</small></div>
+    <div class="stat"><div class="stat-head"><span>Late fees accrued</span><span class="stat-icon">₱</span></div><strong>${money(payments.reduce((t, p) => t + lateFee(p), 0))}</strong><small>After ${Number(state.settings.grace_period_days)} grace days</small></div>
+    <div class="stat"><div class="stat-head"><span>Receipt reviews</span><span class="stat-icon">▧</span></div><strong>${payments.filter((p) => p.status === "review").length}</strong><small>Awaiting admin approval</small></div>`;
+}
+function paymentRowsMarkup(payments) {
+  return payments.length ? payments.map((payment) => `<tr><td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")}</td><td>${escapeHtml(payment.period)}</td><td>${money(payment.base_amount)}</td><td>${money(payment.utility_amount)}</td><td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td><td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td><td>${statusBadge(paymentStatus(payment))}${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" style="display:block;margin-top:5px" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print receipt</button><small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "online" ? "Online" : payment.payment_method === "cash" ? "Cash" : "Method not recorded"}${payment.received_by ? ` · Received by ${escapeHtml(payment.received_by)}` : ""}</small>` : ""}</td><td>${payment.status !== "paid" ? `<button class="text-button" data-action="mark-paid" data-id="${escapeHtml(payment.id)}">${payment.status === "review" ? "Approve & mark paid" : "Mark paid"}</button>${renterById(payment.renter_id).phone ? `<button class="text-button" data-action="sms" data-id="${escapeHtml(payment.id)}">Send SMS</button>` : ""}` : "—"}</td></tr>`).join("") : `<tr><td colspan="8"><div class="empty">No payments match these filters.</div></td></tr>`;
+}
+function updatePaymentsFromFilters() {
+  paymentFilters.search = document.querySelector("#payment-search")?.value.trim() || "";
+  paymentFilters.month = document.querySelector("#payment-month-filter")?.value || "all";
+  paymentFilters.status = document.querySelector("#payment-status-filter")?.value || "all";
+  paymentFilters.method = document.querySelector("#payment-method-filter")?.value || "all";
+  paymentFilters.location = document.querySelector("#payment-location-filter")?.value || "all";
+  paymentFilters.rentalType = document.querySelector("#payment-type-filter")?.value || "all";
+  const query = paymentFilters.search.toLowerCase();
+  const { month, status, method, location, rentalType } = paymentFilters;
+  const matches = state.payments.filter((payment) => {
+    const renter = renterById(payment.renter_id);
+    const paymentText = `${renter.full_name || ""} ${renter.unit_name || ""} ${payment.period || ""} ${payment.due_date || ""}`.toLowerCase();
+    return (month === "all" || payment.due_date?.slice(0, 7) === month) &&
+      (status === "all" || payment.status === status) &&
+      (method === "all" || (method === "unknown" ? !payment.payment_method : payment.payment_method === method)) &&
+      (location === "all" || renter.location === location) &&
+      (rentalType === "all" || renter.rental_type === rentalType) &&
+      paymentText.includes(query);
+  }).sort((a, b) => new Date(b.due_date) - new Date(a.due_date));
+  const tbody = document.querySelector("#payment-table-body");
+  if (tbody) tbody.innerHTML = paymentRowsMarkup(matches);
+  const stats = document.querySelector("#payment-stats");
+  if (stats) stats.innerHTML = paymentStatsMarkup(matches);
+  const resultCount = document.querySelector("#payment-result-count");
+  if (resultCount) resultCount.textContent = `Showing ${matches.length} of ${state.payments.length} payments`;
 }
 function proofFileActions(payment, kind) {
   const online = kind === "online";
@@ -379,6 +424,7 @@ function render() {
       : state.tab === "payments" ? paymentsPage() : utilitiesPage();
   app.innerHTML = appShell(content);
   if (state.tab === "utilities") updateElectricityRatePreview();
+  if (state.tab === "payments") updatePaymentsFromFilters();
 }
 
 function modal(title, body, actions) {
@@ -1129,6 +1175,14 @@ document.addEventListener("click", async (event) => {
   if (action === "delete-payment-proof") return deletePaymentProof(id, target.dataset.kind);
   if (action === "print-payment-receipt") return printPaymentReceipt(id);
   if (action === "refresh-payment-history") return refreshPaymentHistory();
+  if (action === "clear-payment-filters") {
+    Object.assign(paymentFilters, { search: "", month: "all", status: "all", method: "all", location: "all", rentalType: "all" });
+    for (const selector of ["#payment-search", "#payment-month-filter", "#payment-status-filter", "#payment-method-filter", "#payment-location-filter", "#payment-type-filter"]) {
+      const control = document.querySelector(selector);
+      if (control) control.value = selector === "#payment-search" ? "" : "all";
+    }
+    return updatePaymentsFromFilters();
+  }
   if (action === "sms") return sendSms(id);
   if (action === "upload-receipt") {
     const input = document.createElement("input");
@@ -1201,9 +1255,11 @@ document.addEventListener("submit", async (event) => {
 document.addEventListener("input", (event) => {
   if (event.target.matches("[data-setting='electricity_total_bill'], [data-setting='electricity_total_usage']")) updateElectricityRatePreview();
   if (event.target.matches("#renter-search")) updateRenterTableFromFilters();
+  if (event.target.matches("#payment-search")) updatePaymentsFromFilters();
 });
 document.addEventListener("change", (event) => {
   if (event.target.matches("#renter-filter, #renter-location-filter")) updateRenterTableFromFilters();
+  if (event.target.matches("#payment-month-filter, #payment-status-filter, #payment-method-filter, #payment-location-filter, #payment-type-filter")) updatePaymentsFromFilters();
 });
 function updateRenterTableFromFilters() {
   const query = document.querySelector("#renter-search")?.value.toLowerCase() || "";
