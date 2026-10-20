@@ -82,8 +82,9 @@ If the SIM device is on a home network, use a secure VPN/tunnel or a gateway ser
 
 - Contracts support 6 or 12 months. The end date is calculated from the selected start date and term.
 - The administrator enters the electricity provider's current bill and total kWh. When calculating a utility charge, the app saves the visible utility rates first and calculates the provider rate as `provider bill ÷ provider kWh`.
-- Electricity usage is the higher meter reading minus the lower meter reading, so the smaller reading is always subtracted and the usage cannot be negative. The electricity charge is `usage × provider rate`. Water usage remains current minus previous and cannot be negative. Charges are rounded to centavos.
-- Each calculation stores the provider bill, provider kWh, calculated rate, previous and current meter readings, usage, and water/electricity charges as a permanent utility-bill record. The matching payment and utility record are created together, so a failed save cannot leave only one of them behind.
+- The administrator enters the water bill amount directly in PHP; the app does not calculate water from meter readings or a per-unit rate.
+- Electricity usage is the higher meter reading minus the lower meter reading, so the smaller reading is always subtracted and the usage cannot be negative. The electricity charge is `usage × provider rate`. Charges are rounded to centavos.
+- Each calculation stores the entered water amount, provider bill, provider kWh, calculated electricity rate, electricity meter readings and usage as a permanent utility-bill record. The matching payment and utility record are created together, so a failed save cannot leave only one of them behind.
 - Payments are created by an administrator for each billing period. Renters can upload an image or PDF receipt; the admin reviews it and marks the charge paid.
 - Late fees are calculated as `days past due after grace period × fee per late day` and shown on unpaid balances; they are not silently added to the original charge amount.
 - Contracts ending within 30 days appear in the administrator dashboard.

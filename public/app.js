@@ -242,9 +242,8 @@ function utilitiesPage() {
   const rateText = totalBill > 0 && totalUsage > 0
     ? `₱${electricityRate().toFixed(8)} per kWh (${totalBill.toFixed(2)} ÷ ${totalUsage.toFixed(2)})`
     : "Enter the total bill and kWh to calculate the per-kWh rate.";
-  return `<div class="section-title"><div><p>Set your local utility rates. Only administrators can calculate and record meter readings.</p></div></div>
+  return `<div class="section-title"><div><p>Enter the water bill amount directly and calculate electricity charges from current meter readings.</p></div></div>
     <div class="utility-grid">
-      ${rateCard("water_rate", "Water", "PHP per cubic meter", "m³")}
       <div class="utility-card"><h3>Electricity rate</h3><p>Enter the current provider bill and total kWh. Clicking Calculate bill saves these values and keeps a billing snapshot.</p><div class="form-grid">
         <div class="field"><label>Total electricity bill (PHP)</label><input type="number" min="0" step="0.01" data-setting="electricity_total_bill" value="${Number(state.settings.electricity_total_bill)}" /></div>
         <div class="field"><label>Total kWh used on bill</label><input type="number" min="0" step="0.01" data-setting="electricity_total_usage" value="${Number(state.settings.electricity_total_usage)}" /></div>
@@ -254,8 +253,8 @@ function utilitiesPage() {
         <div class="field"><label>Grace period (days)</label><input type="number" min="0" step="1" data-setting="grace_period_days" value="${Number(state.settings.grace_period_days)}" /></div>
       </div><button class="button secondary" style="margin-top:12px" data-action="save-rates">Save policy</button></div>
     </div>
-    <div class="card" style="margin-top:17px"><div class="card-head"><h3>Recent meter calculations</h3><button class="button primary" data-action="add-utility">＋ Calculate bill</button></div>
-      ${bills.length ? `<div class="table-wrap"><table><thead><tr><th>RENTER / UNIT</th><th>PERIOD</th><th>WATER</th><th>ELECTRIC METER</th><th>USAGE</th><th>PROVIDER BILL ÷ kWh = RATE</th><th>ELECTRIC CHARGE</th><th>TOTAL</th></tr></thead><tbody>${bills.map((bill) => `<tr><td>${escapeHtml(renterById(bill.renter_id).full_name || "Renter")}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renterById(bill.renter_id).unit_name || "")}</small></td><td>${escapeHtml(bill.period)}</td><td>${Number(bill.water_usage)} m³<small style="display:block;color:#89958d;margin-top:3px">${money(bill.water_charge)}</small></td><td>${Number(bill.electricity_previous)} → ${Number(bill.electricity_current)} kWh</td><td>${Number(bill.electricity_usage)} kWh</td><td>${money(bill.electricity_total_bill)} ÷ ${Number(bill.electricity_total_usage)} = ₱${Number(bill.electricity_rate).toFixed(8)}</td><td>${money(bill.electricity_charge)}</td><td><strong>${money(bill.amount)}</strong></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><span>ϟ</span>No utility bills yet. Enter the provider bill and kWh, save the rates, then calculate a bill.</div>`}
+    <div class="card" style="margin-top:17px"><div class="card-head"><h3>Recent utility bills</h3><button class="button primary" data-action="add-utility">＋ Calculate bill</button></div>
+      ${bills.length ? `<div class="table-wrap"><table><thead><tr><th>RENTER / UNIT</th><th>PERIOD</th><th>WATER CHARGE</th><th>ELECTRIC METER</th><th>USAGE</th><th>PROVIDER BILL ÷ kWh = RATE</th><th>ELECTRIC CHARGE</th><th>TOTAL</th></tr></thead><tbody>${bills.map((bill) => `<tr><td>${escapeHtml(renterById(bill.renter_id).full_name || "Renter")}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renterById(bill.renter_id).unit_name || "")}</small></td><td>${escapeHtml(bill.period)}</td><td>${money(bill.water_charge)}</td><td>${Number(bill.electricity_previous)} → ${Number(bill.electricity_current)} kWh</td><td>${Number(bill.electricity_usage)} kWh</td><td>${money(bill.electricity_total_bill)} ÷ ${Number(bill.electricity_total_usage)} = ₱${Number(bill.electricity_rate).toFixed(8)}</td><td>${money(bill.electricity_charge)}</td><td><strong>${money(bill.amount)}</strong></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><span>ϟ</span>No utility bills yet. Enter the provider bill and kWh, save the rates, then calculate a bill.</div>`}
     </div>`;
 }
 function updateElectricityRatePreview() {
@@ -477,21 +476,19 @@ function addUtilityModal() {
   modal("Calculate a utility bill", `<form id="utility-form"><div class="form-grid">
     <div class="field full"><label>Renter / unit</label><select name="renter_id">${activeRenters().map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)} · ${escapeHtml(r.unit_name)}</option>`).join("")}</select></div>
     <div class="field full"><label>Billing period</label><input name="period" value="${month}" required /></div>
-    <div class="field"><label>Previous water meter (m³)</label><input name="water_previous" type="number" min="0" step=".01" value="${Number(previousBill?.water_current || 0)}" required /></div>
-    <div class="field"><label>Current water meter (m³)</label><input name="water_current" type="number" min="0" step=".01" placeholder="Enter current reading" required /></div>
+    <div class="field full"><label>Water charge (PHP)</label><input name="water_charge" type="number" min="0" step=".01" placeholder="Enter water bill amount" required /></div>
     <div class="field"><label>Previous electricity meter (kWh)</label><input name="electricity_previous" type="number" min="0" step=".01" value="${Number(previousBill?.electricity_current || 0)}" required /></div>
     <div class="field"><label>Current electricity meter (kWh)</label><input name="electricity_current" type="number" min="0" step=".01" placeholder="Enter current reading" required /></div>
-    <div class="field full notice">Previous readings are prefilled from this renter's latest saved utility bill. Enter the current meter readings to calculate the new usage.</div>
+    <div class="field full notice">Enter the water bill amount directly. Previous electricity reading is prefilled from this renter's latest saved utility bill; enter the current reading to calculate electricity usage.</div>
     <div class="field full notice" id="utility-preview">Enter meter readings to see the calculation using the current rates.</div></div></form>`,
   `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-utility">Save utility charge</button>`);
   const form = document.querySelector("#utility-form");
   form.addEventListener("input", updateUtilityPreview);
   form.elements.renter_id.addEventListener("change", () => {
     const latestBill = state.utility_bills.find((bill) => bill.renter_id === form.elements.renter_id.value);
-    form.elements.water_previous.value = Number(latestBill?.water_current || 0);
     form.elements.electricity_previous.value = Number(latestBill?.electricity_current || 0);
-    form.elements.water_current.value = "";
     form.elements.electricity_current.value = "";
+    form.elements.water_charge.value = "";
     updateUtilityPreview();
   });
   updateUtilityPreview();
@@ -521,24 +518,21 @@ function updateUtilityPreview() {
   const form = document.querySelector("#utility-form");
   if (!form) return;
   const values = Object.fromEntries(new FormData(form));
-  if (values.water_current === "" || values.electricity_current === "") {
-    document.querySelector("#utility-preview").textContent = "Enter both current meter readings to calculate the utility charge.";
+  if (values.electricity_current === "" || values.water_charge === "") {
+    document.querySelector("#utility-preview").textContent = "Enter the water bill amount and current electricity reading to calculate the utility charge.";
     return;
   }
-  const water = Number(values.water_current) - Number(values.water_previous);
+  const waterCharge = Number(values.water_charge);
   const currentElectricityReading = Number(values.electricity_current);
   const previousElectricityReading = Number(values.electricity_previous);
   const higherElectricityReading = Math.max(currentElectricityReading, previousElectricityReading);
   const lowerElectricityReading = Math.min(currentElectricityReading, previousElectricityReading);
   const power = higherElectricityReading - lowerElectricityReading;
   const unitRate = electricityRate();
-  const waterCharge = water * Number(state.settings.water_rate);
   const electricityCharge = power * unitRate;
   const total = Math.round((waterCharge + electricityCharge) * 100) / 100;
   const preview = document.querySelector("#utility-preview");
-  preview.textContent = water < 0
-    ? "Current water reading cannot be lower than the previous water reading."
-    : `Water: ${water.toFixed(2)} m³ × ${money(state.settings.water_rate)}. Electricity rate: ${money(state.settings.electricity_total_bill)} ÷ ${Number(state.settings.electricity_total_usage).toFixed(2)} kWh = ₱${unitRate.toFixed(8)}/kWh. Electricity usage: higher reading ${higherElectricityReading.toFixed(2)} − lower reading ${lowerElectricityReading.toFixed(2)} = ${power.toFixed(2)} kWh; charge: ${power.toFixed(2)} × ₱${unitRate.toFixed(8)} = ${money(electricityCharge)}. Total utility charge: ${money(total)}.`;
+  preview.textContent = `Water charge (entered): ${money(waterCharge)}. Electricity rate: ${money(state.settings.electricity_total_bill)} ÷ ${Number(state.settings.electricity_total_usage).toFixed(2)} kWh = ₱${unitRate.toFixed(8)}/kWh. Electricity usage: higher reading ${higherElectricityReading.toFixed(2)} − lower reading ${lowerElectricityReading.toFixed(2)} = ${power.toFixed(2)} kWh; electricity charge: ${power.toFixed(2)} × ₱${unitRate.toFixed(8)} = ${money(electricityCharge)}. Total utility charge: ${money(total)}.`;
 }
 
 async function saveRenter() {
@@ -624,8 +618,6 @@ async function saveUtility() {
   const form = document.querySelector("#utility-form");
   if (!form.reportValidity()) return;
   const data = Object.fromEntries(new FormData(form));
-  const waterUsage = Number(data.water_current) - Number(data.water_previous);
-  if (waterUsage < 0) return toast("Current water reading cannot be lower than the previous water reading.", true);
   if (!(Number(state.settings.electricity_total_bill) > 0) || !(Number(state.settings.electricity_total_usage) > 0)) {
     return toast("Enter the current provider bill and total kWh in Utility billing first.", true);
   }
@@ -640,8 +632,7 @@ async function saveUtility() {
       p_renter_id: data.renter_id,
       p_period: data.period.trim(),
       p_due_date: new Date().toISOString().slice(0, 10),
-      p_water_previous: Number(data.water_previous),
-      p_water_current: Number(data.water_current),
+      p_water_charge: Number(data.water_charge),
       p_electricity_previous: Number(data.electricity_previous),
       p_electricity_current: Number(data.electricity_current),
     });

@@ -82,15 +82,15 @@ create table if not exists public.utility_bills (
   renter_id uuid not null references public.renters(id) on delete cascade,
   payment_id uuid references public.payments(id) on delete set null,
   period text not null,
-  water_previous numeric(12,2) not null check (water_previous >= 0),
-  water_current numeric(12,2) not null check (water_current >= water_previous),
-  water_usage numeric(12,2) not null check (water_usage >= 0),
+  water_previous numeric(12,2) check (water_previous >= 0),
+  water_current numeric(12,2) check (water_current >= water_previous),
+  water_usage numeric(12,2) check (water_usage >= 0),
   electricity_previous numeric(12,2) not null check (electricity_previous >= 0),
   electricity_current numeric(12,2) not null check (electricity_current >= electricity_previous),
   electricity_usage numeric(12,2) not null check (electricity_usage >= 0),
   electricity_total_bill numeric(12,2) not null default 0 check (electricity_total_bill >= 0),
   electricity_total_usage numeric(12,2) not null default 0 check (electricity_total_usage >= 0),
-  water_rate numeric(12,2) not null check (water_rate >= 0),
+  water_rate numeric(12,2) check (water_rate >= 0),
   electricity_rate numeric(16,8) not null check (electricity_rate >= 0),
   water_charge numeric(12,2) not null default 0 check (water_charge >= 0),
   electricity_charge numeric(12,2) not null default 0 check (electricity_charge >= 0),
@@ -106,6 +106,12 @@ alter table public.utility_bills
 
 alter table public.utility_bills
   alter column electricity_rate type numeric(16,8);
+
+alter table public.utility_bills
+  alter column water_previous drop not null,
+  alter column water_current drop not null,
+  alter column water_usage drop not null,
+  alter column water_rate drop not null;
 
 alter table public.utility_bills
   drop constraint if exists utility_bills_electricity_current_check,
@@ -271,12 +277,13 @@ begin
 end;
 $$;
 
-create or replace function public.admin_create_utility_bill(
+drop function if exists public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric, numeric);
+
+create function public.admin_create_utility_bill(
   p_renter_id uuid,
   p_period text,
   p_due_date date,
-  p_water_previous numeric,
-  p_water_current numeric,
+  p_water_charge numeric,
   p_electricity_previous numeric,
   p_electricity_current numeric
 )
@@ -289,9 +296,7 @@ declare
   renter_status text;
   provider_bill numeric;
   provider_usage numeric;
-  water_rate_value numeric;
   electricity_rate_value numeric;
-  water_usage_value numeric;
   electricity_usage_value numeric;
   water_charge_value numeric;
   electricity_charge_value numeric;
@@ -303,11 +308,10 @@ begin
     raise exception 'Administrator access is required.';
   end if;
   if p_period is null or length(trim(p_period)) = 0 or p_due_date is null
-    or p_water_previous is null or p_water_current is null
+    or p_water_charge is null or p_water_charge < 0
     or p_electricity_previous is null or p_electricity_current is null
-    or p_water_previous < 0 or p_water_current < p_water_previous
     or p_electricity_previous < 0 or p_electricity_current < 0 then
-    raise exception 'Billing period and meter readings are invalid.';
+    raise exception 'Billing period, water amount, or electricity readings are invalid.';
   end if;
 
   select status into renter_status
@@ -318,19 +322,17 @@ begin
   end if;
 
   select (select value #>> '{}' from public.settings where key = 'electricity_total_bill')::numeric,
-         (select value #>> '{}' from public.settings where key = 'electricity_total_usage')::numeric,
-         (select value #>> '{}' from public.settings where key = 'water_rate')::numeric
-  into provider_bill, provider_usage, water_rate_value;
+         (select value #>> '{}' from public.settings where key = 'electricity_total_usage')::numeric
+  into provider_bill, provider_usage;
   if provider_bill is null or provider_usage is null or provider_usage <= 0
-    or provider_bill <= 0 or water_rate_value is null or water_rate_value < 0 then
-    raise exception 'Save the current provider bill, total kWh, and water rate before calculating a utility bill.';
+    or provider_bill <= 0 then
+    raise exception 'Save the current provider bill and total kWh before calculating a utility bill.';
   end if;
 
   electricity_rate_value := round(provider_bill / provider_usage, 8);
-  water_usage_value := p_water_current - p_water_previous;
   electricity_usage_value := greatest(p_electricity_current, p_electricity_previous)
                               - least(p_electricity_current, p_electricity_previous);
-  water_charge_value := round(water_usage_value * water_rate_value, 2);
+  water_charge_value := round(p_water_charge, 2);
   electricity_charge_value := round(electricity_usage_value * electricity_rate_value, 2);
   total_charge := round(water_charge_value + electricity_charge_value, 2);
 
@@ -347,9 +349,9 @@ begin
     electricity_total_bill, electricity_total_usage, water_rate, electricity_rate,
     water_charge, electricity_charge, amount
   ) values (
-    p_renter_id, new_payment_id, trim(p_period), p_water_previous, p_water_current, water_usage_value,
+    p_renter_id, new_payment_id, trim(p_period), null, null, null,
     p_electricity_previous, p_electricity_current, electricity_usage_value,
-    provider_bill, provider_usage, water_rate_value, electricity_rate_value,
+    provider_bill, provider_usage, null, electricity_rate_value,
     water_charge_value, electricity_charge_value, total_charge
   )
   returning * into new_utility_bill;
@@ -598,8 +600,8 @@ revoke all on function public.admin_update_lease(uuid, text, text, integer, date
 grant execute on function public.admin_update_lease(uuid, text, text, integer, date, date, numeric, text) to authenticated;
 revoke all on function public.admin_terminate_lease(uuid, text) from public;
 grant execute on function public.admin_terminate_lease(uuid, text) to authenticated;
-revoke all on function public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric, numeric) from public;
-grant execute on function public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric, numeric) to authenticated;
+revoke all on function public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric) from public;
+grant execute on function public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric) to authenticated;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('renter-documents', 'renter-documents', false, 10485760, array['image/jpeg', 'image/png', 'image/webp'])
