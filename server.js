@@ -44,17 +44,70 @@ async function requireAdmin(req, res, next) {
   next();
 }
 
-app.post("/api/admin/invite", requireAdmin, async (req, res) => {
-  const { email, name, phone } = req.body || {};
-  if (typeof email !== "string" || !email.trim() || typeof name !== "string" || !name.trim()) {
-    return res.status(400).json({ error: "A renter name and email address are required." });
+app.post("/api/admin/renters", requireAdmin, async (req, res) => {
+  const body = req.body || {};
+  const requiredText = ["email", "name", "unitName", "rentalType", "contractStart"];
+  if (requiredText.some((key) => typeof body[key] !== "string" || !body[key].trim()) ||
+      !["Room", "House", "Apartment"].includes(body.rentalType) ||
+      ![6, 12].includes(Number(body.contractMonths)) ||
+      typeof body.rentAmount !== "number" || !Number.isFinite(body.rentAmount) || body.rentAmount < 0 ||
+      typeof body.password !== "string" || body.password.length < 12 ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(body.contractStart) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(body.contractEnd)) {
+    return res.status(400).json({ error: "Provide valid renter details and a password of at least 12 characters." });
   }
 
-  const { data, error } = await adminClient.auth.admin.inviteUserByEmail(email.trim(), {
-    data: { full_name: name.trim(), phone: typeof phone === "string" ? phone.trim() : "" },
+  const { data: created, error: createError } = await adminClient.auth.admin.createUser({
+    email: body.email.trim(),
+    password: body.password,
+    email_confirm: true,
+    user_metadata: {
+      full_name: body.name.trim(),
+      phone: typeof body.phone === "string" ? body.phone.trim() : "",
+    },
   });
-  if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json({ userId: data.user.id });
+  if (createError) return res.status(400).json({ error: createError.message });
+
+  const { data: renter, error: renterError } = await adminClient.from("renters").insert({
+    user_id: created.user.id,
+    full_name: body.name.trim(),
+    email: body.email.trim(),
+    phone: typeof body.phone === "string" ? body.phone.trim() : "",
+    unit_name: body.unitName.trim(),
+    rental_type: body.rentalType,
+    contract_months: Number(body.contractMonths),
+    contract_start: body.contractStart,
+    contract_end: body.contractEnd,
+    rent_amount: body.rentAmount,
+  }).select().single();
+
+  if (renterError) {
+    const { error: rollbackError } = await adminClient.auth.admin.deleteUser(created.user.id);
+    if (rollbackError) console.error("Could not remove auth user after renter creation failed:", rollbackError.message);
+    return res.status(400).json({ error: renterError.message });
+  }
+  res.status(201).json({ renter });
+});
+
+app.put("/api/admin/renters/:renterId/password", requireAdmin, async (req, res) => {
+  const { password } = req.body || {};
+  if (typeof password !== "string" || password.length < 12) {
+    return res.status(400).json({ error: "The renter password must be at least 12 characters." });
+  }
+
+  const { data: renter, error: renterError } = await adminClient
+    .from("renters").select("user_id").eq("id", req.params.renterId).maybeSingle();
+  if (renterError) return res.status(500).json({ error: "Could not look up the renter account." });
+  if (!renter?.user_id) return res.status(404).json({ error: "No login account is linked to this renter." });
+
+  const { data: profile, error: profileError } = await adminClient
+    .from("profiles").select("role").eq("id", renter.user_id).maybeSingle();
+  if (profileError) return res.status(500).json({ error: "Could not verify the renter account." });
+  if (profile?.role !== "renter") return res.status(409).json({ error: "This linked account is not a renter account." });
+
+  const { error: updateError } = await adminClient.auth.admin.updateUserById(renter.user_id, { password });
+  if (updateError) return res.status(400).json({ error: updateError.message });
+  res.json({ updated: true });
 });
 
 app.post("/api/sms/payment-reminder", requireAdmin, async (req, res) => {

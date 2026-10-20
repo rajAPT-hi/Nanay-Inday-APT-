@@ -109,6 +109,21 @@ function toast(message, error = false) {
   document.body.append(element);
   setTimeout(() => element.remove(), 3500);
 }
+async function adminRequest(url, method, body) {
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) throw new Error("Your session expired. Sign in again.");
+  const response = await fetch(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "The administrator request failed.");
+  return result;
+}
 function pageTitle() {
   return ({ overview: "Overview", renters: "Renters & leases", payments: "Payments", utilities: "Utility billing" })[state.tab] || "Overview";
 }
@@ -173,8 +188,8 @@ function formatDate(date) {
 }
 function renderRenterTable(renters) {
   if (!renters.length) return `<div class="empty"><span>♙</span>No renters yet. Add your first renter to get started.</div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>RENTER</th><th>UNIT</th><th>RENT / MONTH</th><th>CONTRACT ENDS</th><th>STATUS</th></tr></thead><tbody>
-    ${renters.map((renter) => `<tr><td><div class="person-cell"><div class="avatar">${initials(renter.full_name)}</div><div><strong>${escapeHtml(renter.full_name)}</strong><small>${escapeHtml(renter.email)}</small></div></div></td><td>${escapeHtml(renter.unit_name)}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renter.rental_type)}</small></td><td>${money(renter.rent_amount)}</td><td>${formatDate(renter.contract_end)}</td><td>${statusBadge(contractStatus(renter))}</td></tr>`).join("")}
+  return `<div class="table-wrap"><table><thead><tr><th>RENTER</th><th>UNIT</th><th>RENT / MONTH</th><th>CONTRACT ENDS</th><th>STATUS</th><th>ACCOUNT</th></tr></thead><tbody>
+    ${renters.map((renter) => `<tr><td><div class="person-cell"><div class="avatar">${initials(renter.full_name)}</div><div><strong>${escapeHtml(renter.full_name)}</strong><small>${escapeHtml(renter.email)}</small></div></div></td><td>${escapeHtml(renter.unit_name)}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renter.rental_type)}</small></td><td>${money(renter.rent_amount)}</td><td>${formatDate(renter.contract_end)}</td><td>${statusBadge(contractStatus(renter))}</td><td>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${renter.id}">Change password</button>` : "No login"}</td></tr>`).join("")}
     </tbody></table></div>`;
 }
 function rentersPage() {
@@ -272,8 +287,18 @@ function addRenterModal() {
     <div class="field"><label>Contract term</label><select name="contract_months"><option value="6">6 months</option><option value="12">1 year (12 months)</option></select></div>
     <div class="field"><label>Contract start</label><input name="contract_start" type="date" value="${start}" required /></div>
     <div class="field"><label>Monthly rent (PHP)</label><input name="rent_amount" type="number" min="0" step="0.01" required /></div>
-    <div class="field full notice">An invitation email will be sent so the renter can set a password and access their personal renter view.</div></div></form>`,
+    <div class="field"><label>Renter login password</label><input name="password" type="password" autocomplete="new-password" minlength="12" required /></div>
+    <div class="field full notice">Set a temporary password with at least 12 characters. Share it with the renter privately, and ask them to change it after signing in. The password is sent directly to Supabase Auth and is never saved in the rental record.</div></div></form>`,
   `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-renter">Add renter</button>`);
+}
+function changeRenterPasswordModal(renterId) {
+  const renter = renterById(renterId);
+  if (!renter.user_id) return toast("This renter does not have a linked login account.", true);
+  modal(`Change password · ${escapeHtml(renter.full_name)}`, `<form id="renter-password-form" data-renter-id="${escapeHtml(renterId)}"><div class="form-grid">
+    <div class="field full"><label>New password</label><input name="password" type="password" autocomplete="new-password" minlength="12" required /></div>
+    <div class="field full"><label>Confirm new password</label><input name="confirm_password" type="password" autocomplete="new-password" minlength="12" required /></div>
+    <div class="field full notice">The new password replaces the renter's current password immediately. Share it privately; never send it in a group message.</div>
+  </div></form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-renter-password">Update password</button>`);
 }
 function addPaymentModal() {
   const today = new Date();
@@ -339,28 +364,54 @@ async function saveRenter() {
   };
   try {
     {
-      const { data: invited, error: inviteError } = await fetch("/api/admin/invite", {
+      const { data: invited, error: inviteError } = await fetch("/api/admin/renters", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${(await supabase.auth.getSession()).data.session.access_token}` },
-        body: JSON.stringify({ email: renter.email, name: renter.full_name, phone: renter.phone }),
+        body: JSON.stringify({
+          email: renter.email,
+          name: renter.full_name,
+          phone: renter.phone,
+          unitName: renter.unit_name,
+          rentalType: renter.rental_type,
+          contractMonths: renter.contract_months,
+          contractStart: renter.contract_start,
+          contractEnd: renter.contract_end,
+          rentAmount: renter.rent_amount,
+          password: data.password,
+        }),
       }).then(async (response) => {
         const json = await response.json();
         if (!response.ok) throw new Error(json.error || "Could not invite renter.");
         return { data: json, error: null };
       });
       if (inviteError) throw inviteError;
-      renter.user_id = invited.userId;
-      const { data: inserted, error } = await supabase.from("renters").insert(renter).select().single();
-      if (error) throw error;
-      state.renters.unshift(inserted);
+      state.renters.unshift(invited.renter);
     }
     document.querySelector(".modal-backdrop")?.remove();
     render();
-    toast("Renter added. They can sign in after accepting their email invitation.");
+    toast("Renter account created with the password you set.");
   } catch (error) {
     toast(error.message || "Could not add renter.", true);
   }
 }
+async function changeRenterPassword(renterId) {
+  const form = document.querySelector("#renter-password-form");
+  if (!form.reportValidity()) return;
+  const values = Object.fromEntries(new FormData(form));
+  if (values.password !== values.confirm_password) {
+    return toast("The new passwords do not match.", true);
+  }
+  try {
+    await adminRequest(`/api/admin/renters/${encodeURIComponent(renterId)}/password`, "PUT", {
+      password: values.password,
+    });
+    document.querySelector(".modal-backdrop")?.remove();
+    toast("Renter password changed. Share it with them privately.");
+  } catch (error) {
+    toast(error.message || "Could not change renter password.", true);
+  }
+}
+
 async function savePayment() {
   const form = document.querySelector("#payment-form");
   if (!form.reportValidity()) return;
@@ -515,6 +566,8 @@ document.addEventListener("click", async (event) => {
     return toast("If an account exists for that address, password reset instructions have been sent.");
   }
   if (action === "add-renter") return addRenterModal();
+  if (action === "change-renter-password") return changeRenterPasswordModal(id);
+  if (action === "save-renter-password") return changeRenterPassword(document.querySelector("#renter-password-form")?.dataset.renterId);
   if (action === "add-payment") return state.renters.length ? addPaymentModal() : toast("Add a renter before creating a charge.", true);
   if (action === "add-utility") return addUtilityModal();
   if (action === "close-modal") return document.querySelector(".modal-backdrop")?.remove();
