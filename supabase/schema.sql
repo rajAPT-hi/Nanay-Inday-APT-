@@ -86,8 +86,60 @@ create table if not exists public.payments (
   status text not null default 'pending' check (status in ('pending', 'review', 'paid')),
   receipt_path text,
   paid_at date,
+  payment_method text check (payment_method in ('cash', 'online')),
+  received_by text,
+  online_receipt_path text,
+  late_fee_amount numeric(12,2) not null default 0 check (late_fee_amount >= 0),
+  paid_amount numeric(12,2) not null default 0 check (paid_amount >= 0),
   created_at timestamptz not null default now()
 );
+
+alter table public.payments
+  add column if not exists payment_method text,
+  add column if not exists received_by text,
+  add column if not exists online_receipt_path text,
+  add column if not exists late_fee_amount numeric(12,2) not null default 0,
+  add column if not exists paid_amount numeric(12,2) not null default 0;
+
+alter table public.payments
+  drop constraint if exists payments_payment_method_check,
+  drop constraint if exists payments_late_fee_amount_check,
+  drop constraint if exists payments_paid_amount_check;
+
+alter table public.payments
+  add constraint payments_payment_method_check check (payment_method is null or payment_method in ('cash', 'online')),
+  add constraint payments_late_fee_amount_check check (late_fee_amount >= 0),
+  add constraint payments_paid_amount_check check (paid_amount >= 0);
+
+update public.payments
+set paid_amount = amount
+where status = 'paid' and paid_amount = 0;
+
+create table if not exists public.rent_reminder_emails (
+  renter_id uuid not null references public.renters(id) on delete cascade,
+  due_date date not null,
+  reminder_days integer not null check (reminder_days in (0, 7)),
+  status text not null check (status in ('sending', 'sent', 'failed')),
+  sent_at timestamptz,
+  error_message text,
+  primary key (renter_id, due_date, reminder_days)
+);
+
+create table if not exists public.rent_reminder_email_deliveries (
+  renter_id uuid not null references public.renters(id) on delete cascade,
+  due_date date not null,
+  reminder_days integer not null check (reminder_days in (0, 7)),
+  recipient_email text not null,
+  recipient_type text not null check (recipient_type in ('admin', 'renter')),
+  status text not null check (status in ('sending', 'sent', 'failed')),
+  sent_at timestamptz,
+  error_message text,
+  updated_at timestamptz not null default now(),
+  primary key (renter_id, due_date, reminder_days, recipient_email)
+);
+
+alter table public.rent_reminder_email_deliveries
+  add column if not exists updated_at timestamptz not null default now();
 
 create table if not exists public.utility_bills (
   id uuid primary key default gen_random_uuid(),
@@ -304,7 +356,7 @@ $$;
 
 drop function if exists public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric, numeric);
 
-create function public.admin_create_utility_bill(
+create or replace function public.admin_create_utility_bill(
   p_renter_id uuid,
   p_period text,
   p_due_date date,
@@ -441,6 +493,11 @@ begin
       or new.utility_amount is distinct from old.utility_amount
       or new.amount is distinct from old.amount
       or new.paid_at is distinct from old.paid_at
+      or new.payment_method is distinct from old.payment_method
+      or new.received_by is distinct from old.received_by
+      or new.online_receipt_path is distinct from old.online_receipt_path
+      or new.late_fee_amount is distinct from old.late_fee_amount
+      or new.paid_amount is distinct from old.paid_amount
       or new.status is distinct from 'review'
       or new.receipt_path is null then
       raise exception 'Renter accounts may only submit a receipt for an unpaid payment.';
@@ -465,6 +522,8 @@ alter table public.lease_changes enable row level security;
 alter table public.payments enable row level security;
 alter table public.utility_bills enable row level security;
 alter table public.settings enable row level security;
+alter table public.rent_reminder_emails enable row level security;
+alter table public.rent_reminder_email_deliveries enable row level security;
 
 drop policy if exists "Profiles are visible to their owner and admins" on public.profiles;
 create policy "Profiles are visible to their owner and admins"
@@ -634,6 +693,19 @@ on conflict (id) do update
 set public = false,
     file_size_limit = 10485760,
     allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp'];
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('payment-proofs', 'payment-proofs', false, 10485760, array['image/jpeg', 'image/png', 'image/webp', 'application/pdf'])
+on conflict (id) do update
+set public = false,
+    file_size_limit = 10485760,
+    allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+drop policy if exists "Admins manage online payment proofs" on storage.objects;
+create policy "Admins manage online payment proofs"
+  on storage.objects for all to authenticated
+  using (bucket_id = 'payment-proofs' and (select public.is_admin()))
+  with check (bucket_id = 'payment-proofs' and (select public.is_admin()));
 
 drop policy if exists "Admins manage renter documents" on storage.objects;
 create policy "Admins manage renter documents"

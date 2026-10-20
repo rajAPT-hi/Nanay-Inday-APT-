@@ -16,7 +16,7 @@ Open `http://localhost:3000` and sign in with an account created in Supabase Aut
 ## Configure Supabase
 
 1. Create a Supabase organization/project and save the database password somewhere private.
-2. In the project **SQL Editor**, open a new query, paste the complete contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This creates or updates the tables, private receipt and renter-document buckets, lease audit functions, and row-level security policies. When updating an existing project, rerun the full schema so all migration columns, functions, and policies are applied.
+2. In the project **SQL Editor**, open a new query, paste the complete contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This creates or updates the tables, private receipt, payment-proof, and renter-document buckets, lease audit functions, reminder log, and row-level security policies. When updating an existing project, rerun the full schema so all migration columns, functions, and policies are applied.
 3. From **Project Settings → API Keys** (or **Data API**, depending on the dashboard version), copy the project URL and publishable/anon key. Copy the **service_role/secret key** separately for the Render server only. Never put this key in `public/`, browser code, GitHub, or chat.
 4. Configure Supabase **Authentication → SMTP Settings** with an email provider if you want password-reset emails to work. The admin can create renter accounts by setting an initial password directly; renter passwords are stored only by Supabase Auth, never in the rental tables.
 5. In Supabase **Authentication → Users**, add the property administrator with the owner's email. The schema creates a `profiles` row when that auth user is created. In **SQL Editor**, promote only that administrator account (replace the example email):
@@ -50,6 +50,21 @@ Open `http://localhost:3000` and sign in with an account created in Supabase Aut
 
 The schema enables row-level security. Renters can only read their own rental, charges, and utility bills, and can submit a receipt for an unpaid charge. Administrators manage renter records, rates, bills, and payment status. Receipt files are kept in a private Storage bucket and are shown with short-lived signed links.
 
+### Payment confirmation and rent reminder emails
+
+Before confirming a payment, an administrator must select cash or online and enter who received it. Online payments also require an image or PDF proof (up to 10 MB). The proof is stored in a separate private, administrator-only bucket. Once confirmed, the renter can view and print a payment receipt from their payment history; the browser print dialog can save it as a PDF. Admins can open a renter's **Payment history** from **Renters & leases** to review prior charges and view/print all generated receipts. A newly created charge appears in the renter's history as unpaid; its payment receipt is generated only after admin confirmation. Renters can use **Refresh** to load charges added while they were already signed in.
+
+To email both administrator accounts a rent reminder 7 days before the due date and again on the due date, configure these SMTP variables in Render's service **Environment** settings:
+
+- `SMTP_HOST`: SMTP server hostname from your email provider.
+- `SMTP_PORT`: SMTP port, usually `465` for implicit TLS or `587` for STARTTLS.
+- `SMTP_USER` and `SMTP_PASSWORD`: SMTP account credentials or provider-generated app password.
+- `SMTP_FROM`: sender address permitted by your SMTP provider.
+
+The app uses `Asia/Manila` for due-date checks and emails both administrator accounts and the renter at the email address on their rental record. Reminder attempts are tracked separately for each recipient in Supabase to prevent duplicate messages; failed sends are logged and retried during that due-date window. The checker runs every 15 minutes while the Render web process is running. Render's free web services can spin down when idle, so use an always-on service or a dedicated scheduled job if reminders must be delivered reliably even when nobody visits the app. Keep SMTP credentials only in Render environment settings, not in Git or browser code. Email sending stays disabled until all five SMTP values are configured.
+
+When adding a new renter from **Renters & leases**, enter the renter's login email and a temporary password of at least 12 characters; this creates the Supabase Auth account and rental record together. For an existing renter without a linked login, select **Create login** in the renter row and set a temporary password. The email must not already be used by another Supabase Auth account. If the app reports a duplicate email, check **Supabase → Authentication → Users** before changing or reusing that address. Passwords are set directly in Supabase Auth and are never stored in the rental database.
+
 When creating a renter, administrators select a rental location (Vasquez, Villa, Cabalawan, or Kaskag) and set the recurring rent due day (1–31). New rental charges default to the renter's next due date; months shorter than the selected due day use that month's last calendar day.
 
 From **Renters & leases**, administrators can edit an active renter's unit, location, rental type, term, dates, rent due day, and monthly rent. Every edit requires a reason and creates a before/after audit entry visible under **History**. Lease termination also requires a reason, disables the linked renter account in the app, and preserves the renter, payment history, and documents for administrator review. Terminated renters cannot submit receipts or access rental data.
@@ -60,7 +75,7 @@ Administrators can upload or replace renter ID and signed physical contract imag
 
 1. Install Node.js 20 or later and Git on the PC if they are not already installed. Create a **private GitHub repository** and upload this project. The included `.gitignore` prevents `.env` and `node_modules` from being uploaded.
 2. In Render, choose **New → Blueprint**, connect that GitHub repository, and deploy the included `render.yaml`. Alternatively create a **Web Service**, choose Node, set build command to `npm install`, and start command to `npm start`.
-3. In the Render service **Environment** settings, add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`. Get each from the Supabase project. Add SMS gateway variables only after the SIM gateway has been securely configured. Never add real keys to the repository.
+3. In the Render service **Environment** settings, add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`. Get each from the Supabase project. Add `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM` to enable upcoming-rent notifications. Add SMS gateway variables only after the SIM gateway has been securely configured. Never add real keys to the repository.
 4. Wait for the Render deployment to succeed, then open `https://YOUR-SERVICE.onrender.com/api/health`. It should return `{"status":"ok"}`. Open the site and sign in with the admin account.
 5. Copy the actual `https://YOUR-SERVICE.onrender.com` URL into Supabase **Authentication → URL Configuration** as the Site URL and an allowed redirect URL, save, and test adding a renter and sending a password reset.
 6. To update the app after changes, push the updated project to the connected GitHub branch; Render redeploys it.
@@ -87,7 +102,7 @@ If the SIM device is on a home network, use a secure VPN/tunnel or a gateway ser
 - The administrator enters the water bill amount directly in PHP; the app does not calculate water from meter readings or a per-unit rate.
 - Electricity usage is the higher meter reading minus the lower meter reading, so the smaller reading is always subtracted and the usage cannot be negative. The electricity charge is `usage × provider rate`. Charges are rounded to centavos.
 - Each calculation stores the entered water amount, provider bill, provider kWh, calculated electricity rate, electricity meter readings and usage as a permanent utility-bill record. The matching payment and utility record are created together, so a failed save cannot leave only one of them behind.
-- Payments are created by an administrator for each billing period. Renters can upload an image or PDF receipt; the admin reviews it and marks the charge paid.
+- Payments are created by an administrator for each billing period. Renters can upload an image or PDF receipt; the administrator reviews it and confirms the payment with the payment method and recipient. Online payment confirmation requires an uploaded proof image or PDF. Confirmed payments generate a renter-facing printable receipt with the amount received, including any late fee collected.
 - Late fees are calculated as `days past due after grace period × fee per late day` and shown on unpaid balances; they are not silently added to the original charge amount.
 - Contracts ending within 30 days appear in the administrator dashboard.
 
