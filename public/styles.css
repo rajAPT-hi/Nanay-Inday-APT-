@@ -41,7 +41,6 @@ button { cursor: pointer; }
 h1 { font: 800 clamp(22px, 3vw, 29px) Manrope, sans-serif; letter-spacing: -.8px; margin: 0; }
 .top-actions { display: flex; gap: 10px; align-items: center; }
 .mode-pill, .status-pill { border-radius: 99px; padding: 7px 11px; background: #fff; border: 1px solid var(--line); font-size: 11px; color: #65736a; font-weight: 600; }
-.mode-pill.demo { color: #8b6821; background: #fff8e7; border-color: #f4e7c3; }
 .mode-pill.live { color: var(--green); background: var(--green-soft); }
 .button { border: 0; padding: 10px 15px; border-radius: 9px; font-size: 12px; font-weight: 700; }
 .button.primary { background: var(--green); color: #fff; }
@@ -127,9 +126,6 @@ td { border-top: 1px solid #f0f2ef; padding: 12px 11px; font-size: 11px; white-s
 .login-box > p { color: var(--muted); font-size: 13px; margin: 0 0 23px; }
 .login-box .field { margin-bottom: 13px; }
 .login-box .button { width: 100%; padding: 12px; margin-top: 5px; }
-.login-divider { text-align: center; color: #a1aaa4; font-size: 10px; margin: 17px 0; }
-.demo-row { display: flex; gap: 9px; }
-.demo-row .button { flex: 1; }
 .toast { position: fixed; bottom: 22px; right: 22px; z-index: 15; padding: 12px 16px; color: #fff; background: #243b2d; border-radius: 9px; box-shadow: var(--shadow); font-size: 12px; }
 .toast.error { background: #9f493f; }
 .loading { min-height: 100vh; display: grid; place-items: center; color: var(--muted); }

@@ -11,7 +11,7 @@ npm install
 npm start
 ```
 
-Open `http://localhost:3000`. Use **Admin demo** or **Renter demo** to explore the interface. Demo changes stay in this browser's local storage; demo accounts are not real authentication and should not be used for real renter data.
+Open `http://localhost:3000` and sign in with an account created in Supabase Authentication. The app uses live Supabase authentication and does not provide demo accounts.
 
 ## Configure Supabase
 
@@ -30,6 +30,24 @@ Open `http://localhost:3000`. Use **Admin demo** or **Renter demo** to explore t
 6. You can initially allow the eventual Render hostname in **Authentication → URL Configuration → Redirect URLs**, for example `https://YOUR-SERVICE.onrender.com/**`. After Render creates the real hostname, set the exact production Site URL and redirect URL there. Do not leave broad wildcard URLs enabled in a production project.
 7. Use renter email addresses that the renters can access. Administrators add the renter from the app; Supabase emails an invitation so the renter can set a password.
 
+### Add another administrator
+
+1. In Supabase **Authentication → Users**, add or invite the second administrator using their own email address. They should accept the invitation and set their password.
+2. In the SQL Editor, replace the example email and run:
+
+   ```sql
+   update public.profiles
+   set role = 'admin'
+   where id = (
+     select id
+     from auth.users
+     where lower(email) = lower('second-admin@example.com')
+   )
+   returning id, full_name, role;
+   ```
+
+3. Confirm the result shows the expected user and `admin`. If no row is returned, verify the email under **Authentication → Users** and check that the auth profile was created. The new administrator can then sign in through the app using their Supabase password.
+
 The schema enables row-level security. Renters can only read their own rental, charges, and utility bills, and can submit a receipt for an unpaid charge. Administrators manage renter records, rates, bills, and payment status. Receipt files are kept in a private Storage bucket and are shown with short-lived signed links.
 
 ## Deploy to Render
@@ -37,7 +55,7 @@ The schema enables row-level security. Renters can only read their own rental, c
 1. Install Node.js 20 or later and Git on the PC if they are not already installed. Create a **private GitHub repository** and upload this project. The included `.gitignore` prevents `.env` and `node_modules` from being uploaded.
 2. In Render, choose **New → Blueprint**, connect that GitHub repository, and deploy the included `render.yaml`. Alternatively create a **Web Service**, choose Node, set build command to `npm install`, and start command to `npm start`.
 3. In the Render service **Environment** settings, add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`. Get each from the Supabase project. Add SMS gateway variables only after the SIM gateway has been securely configured. Never add real keys to the repository.
-4. Wait for the Render deployment to succeed, then open `https://YOUR-SERVICE.onrender.com/api/health`. It should return `{"status":"ok"}`. Open the site, sign in with the admin account, and test with demo/non-sensitive records first.
+4. Wait for the Render deployment to succeed, then open `https://YOUR-SERVICE.onrender.com/api/health`. It should return `{"status":"ok"}`. Open the site and sign in with the admin account.
 5. Copy the actual `https://YOUR-SERVICE.onrender.com` URL into Supabase **Authentication → URL Configuration** as the Site URL and an allowed redirect URL, save, and test an invitation and password reset.
 6. To update the app after changes, push the updated project to the connected GitHub branch; Render redeploys it.
 

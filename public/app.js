@@ -7,65 +7,24 @@ const supabase = config.cloudReady
   : null;
 let passwordSetupRequired = /type=invite/i.test(`${window.location.hash}${window.location.search}`);
 
-const demoSeed = {
-  renters: [
-    { id: "r1", full_name: "Maria Santos", email: "maria@example.com", phone: "+639171234567", unit_name: "Room 01", rental_type: "Room", contract_months: 12, contract_start: "2026-01-01", contract_end: "2026-12-31", rent_amount: 6500, user_id: "demo-renter" },
-    { id: "r2", full_name: "Jose Dela Cruz", email: "jose@example.com", phone: "+639189876543", unit_name: "Apartment A", rental_type: "Apartment", contract_months: 6, contract_start: "2026-05-01", contract_end: "2026-10-31", rent_amount: 12000, user_id: "demo-renter-2" },
-    { id: "r3", full_name: "Ana Reyes", email: "ana@example.com", phone: "+639201112233", unit_name: "Room 03", rental_type: "Room", contract_months: 12, contract_start: "2026-07-01", contract_end: "2027-06-30", rent_amount: 7000, user_id: "demo-renter-3" },
-  ],
-  payments: [
-    { id: "p1", renter_id: "r1", period: "October 2026", due_date: "2026-10-05", base_amount: 6500, utility_amount: 400, amount: 6900, status: "paid", receipt_path: null, paid_at: "2026-10-04" },
-    { id: "p2", renter_id: "r2", period: "October 2026", due_date: "2026-10-05", base_amount: 12000, utility_amount: 950, amount: 12950, status: "pending", receipt_path: null, paid_at: null },
-    { id: "p3", renter_id: "r3", period: "October 2026", due_date: "2026-10-05", base_amount: 7000, utility_amount: 350, amount: 7350, status: "pending", receipt_path: null, paid_at: null },
-  ],
-  utility_bills: [],
-  settings: {
-    water_rate: 45,
-    electricity_rate: 13,
-    electricity_total_bill: 1300,
-    electricity_total_usage: 100,
-    late_fee_per_day: 50,
-    grace_period_days: 3,
-  },
-};
-
 let state = {
-  isDemo: false,
   role: null,
   user: null,
   passwordSetupRequired: false,
+  loginMessage: "",
   tab: "overview",
   renters: [],
   payments: [],
   utility_bills: [],
-  settings: { ...demoSeed.settings },
+  settings: {
+    water_rate: 45,
+    electricity_rate: 0,
+    electricity_total_bill: 0,
+    electricity_total_usage: 0,
+    late_fee_per_day: 50,
+    grace_period_days: 3,
+  },
 };
-
-function loadDemo() {
-  const saved = localStorage.getItem("nanay-rentals-demo");
-  const data = saved ? JSON.parse(saved) : demoSeed;
-  state = {
-    ...state,
-    ...structuredClone(data),
-    settings: { ...demoSeed.settings, ...data.settings },
-    isDemo: true,
-    user: { email: "admin@nanayinday.test", name: "Nanay Inday" },
-    role: "admin",
-  };
-  persistDemo();
-  render();
-}
-
-function persistDemo() {
-  if (state.isDemo) {
-    localStorage.setItem("nanay-rentals-demo", JSON.stringify({
-      renters: state.renters,
-      payments: state.payments,
-      utility_bills: state.utility_bills,
-      settings: state.settings,
-    }));
-  }
-}
 
 async function fetchCloudData() {
   const [renters, payments, utilities, settings, profile] = await Promise.all([
@@ -78,12 +37,18 @@ async function fetchCloudData() {
   for (const result of [renters, payments, utilities, settings, profile]) {
     if (result.error) throw result.error;
   }
+  if (!["admin", "renter"].includes(profile.data.role)) {
+    throw new Error("Your account does not have an assigned app role. Ask an administrator to set it up.");
+  }
   state.role = profile.data.role;
   state.user.name = profile.data.full_name || state.user.email;
   state.renters = renters.data;
   state.payments = payments.data;
   state.utility_bills = utilities.data;
-  state.settings = { ...demoSeed.settings, ...Object.fromEntries(settings.data.map((row) => [row.key, Number(row.value)])) };
+  state.settings = {
+    ...state.settings,
+    ...Object.fromEntries(settings.data.map((row) => [row.key, Number(row.value)])),
+  };
 }
 
 function escapeHtml(value = "") {
@@ -166,7 +131,7 @@ function appShell(content) {
     </aside>
     <main class="main">
       <header class="topbar"><div><div class="eyebrow">Nanay Inday's Rentals &nbsp; / &nbsp; ${pageTitle()}</div><h1>${pageTitle()}</h1></div>
-        <div class="top-actions"><span class="mode-pill ${state.isDemo ? "demo" : "live"}">${state.isDemo ? "● Demo workspace" : "● Cloud connected"}</span>
+        <div class="top-actions"><span class="mode-pill live">● Cloud connected</span>
           ${!renterMode && state.tab === "renters" ? `<button class="button primary" data-action="add-renter">＋ Add renter</button>` : ""}
           ${!renterMode && state.tab === "payments" ? `<button class="button primary" data-action="add-payment">＋ Create charge</button>` : ""}
           ${!renterMode && state.tab === "utilities" ? `<button class="button primary" data-action="add-utility">＋ Calculate bill</button>` : ""}
@@ -280,9 +245,8 @@ function render() {
   }
   if (!state.user) {
     app.innerHTML = `<div class="login-page"><section class="login-brand"><div class="brand"><div class="brand-mark" style="background:#fff;color:#286b50">⌂</div><div><strong>Nanay Inday's</strong><small style="color:#dbe9df">HOME & ROOM RENTALS</small></div></div><div><h1>A little more peace of mind, right at home.</h1><p>Manage your renters, monthly payments, and home utilities in one simple place.</p></div><small style="color:#dbe9df;z-index:1">A welcoming home starts with thoughtful management.</small></section>
-      <section class="login-box"><h2>Welcome home</h2><p>Sign in to your rental account.</p><form id="login-form"><div class="field"><label>Email address</label><input name="email" type="email" autocomplete="username" placeholder="you@example.com" required /></div><div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required /></div><button class="button primary" type="submit">Sign in</button><div id="login-error"></div><button class="text-button" style="margin-top:13px" type="button" data-action="reset-password">Forgot your password?</button></form>
-      <div class="login-divider">OR EXPLORE THE APP</div><div class="demo-row"><button class="button secondary" data-action="demo-admin">Admin demo</button><button class="button secondary" data-action="demo-renter">Renter demo</button></div>
-      <p style="margin-top:20px;font-size:10px;line-height:1.6">For live access, sign in with an account provided by your property administrator.</p></section></div>`;
+      <section class="login-box"><h2>Welcome home</h2><p>Sign in to your rental account.</p><form id="login-form"><div class="field"><label>Email address</label><input name="email" type="email" autocomplete="username" placeholder="you@example.com" required /></div><div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required /></div><button class="button primary" type="submit" ${supabase ? "" : "disabled"}>Sign in</button><div id="login-error" class="${state.loginMessage || !supabase ? "notice" : ""}">${escapeHtml(state.loginMessage || (!supabase ? "Cloud sign-in is not configured. Check the Render Supabase environment variables." : ""))}</div><button class="text-button" style="margin-top:13px" type="button" data-action="reset-password">Forgot your password?</button></form>
+      <p style="margin-top:20px;font-size:12px;line-height:1.6">Sign in with an account provided by your property administrator.</p></section></div>`;
     return;
   }
   const content = state.tab === "overview" ? overviewPage()
@@ -374,12 +338,7 @@ async function saveRenter() {
     contract_start: data.contract_start, contract_end: endDate.toISOString().slice(0, 10), rent_amount: Number(data.rent_amount),
   };
   try {
-    if (state.isDemo) {
-      renter.id = crypto.randomUUID();
-      renter.user_id = `demo-${renter.id}`;
-      state.renters.unshift(renter);
-      persistDemo();
-    } else {
+    {
       const { data: invited, error: inviteError } = await fetch("/api/admin/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${(await supabase.auth.getSession()).data.session.access_token}` },
@@ -412,11 +371,7 @@ async function savePayment() {
     amount: Number(data.base_amount) + Number(data.utility_amount), status: "pending",
   };
   try {
-    if (state.isDemo) {
-      payment.id = crypto.randomUUID();
-      state.payments.unshift(payment);
-      persistDemo();
-    } else {
+    {
       const { data: inserted, error } = await supabase.from("payments").insert(payment).select().single();
       if (error) throw error;
       state.payments.unshift(inserted);
@@ -451,13 +406,7 @@ async function saveUtility() {
     water_charge: Math.round(waterCharge * 100) / 100, amount,
   };
   try {
-    if (state.isDemo) {
-      const payment = { id: crypto.randomUUID(), renter_id: bill.renter_id, period: `${bill.period} · Utilities`, due_date: new Date().toISOString().slice(0, 10), base_amount: 0, utility_amount: amount, amount, status: "pending", receipt_path: null };
-      bill.id = crypto.randomUUID();
-      state.utility_bills.unshift(bill);
-      state.payments.unshift(payment);
-      persistDemo();
-    } else {
+    {
       const { data: payment, error: paymentError } = await supabase.from("payments").insert({
         renter_id: bill.renter_id, period: `${bill.period} · Utilities`, due_date: new Date().toISOString().slice(0, 10),
         base_amount: 0, utility_amount: amount, amount, status: "pending",
@@ -483,30 +432,20 @@ async function saveRates() {
   }
   values.electricity_rate = values.electricity_total_bill / values.electricity_total_usage;
   try {
-    if (!state.isDemo) {
-      const { error } = await supabase.from("settings").upsert(Object.entries(values).map(([key, value]) => ({ key, value })), { onConflict: "key" });
-      if (error) throw error;
-    }
+    const { error } = await supabase.from("settings").upsert(Object.entries(values).map(([key, value]) => ({ key, value })), { onConflict: "key" });
+    if (error) throw error;
     state.settings = { ...state.settings, ...values };
-    persistDemo();
     render();
     toast("Utility rates and late fee policy saved.");
   } catch (error) { toast(error.message || "Could not save settings.", true); }
 }
 async function markPaid(id) {
   try {
-    if (state.isDemo) {
-      const payment = state.payments.find((item) => item.id === id);
-      payment.status = "paid";
-      payment.paid_at = new Date().toISOString().slice(0, 10);
-      persistDemo();
-    } else {
-      const { error } = await supabase.from("payments").update({ status: "paid", paid_at: new Date().toISOString().slice(0, 10) }).eq("id", id);
-      if (error) throw error;
-      const payment = state.payments.find((item) => item.id === id);
-      payment.status = "paid";
-      payment.paid_at = new Date().toISOString().slice(0, 10);
-    }
+    const { error } = await supabase.from("payments").update({ status: "paid", paid_at: new Date().toISOString().slice(0, 10) }).eq("id", id);
+    if (error) throw error;
+    const payment = state.payments.find((item) => item.id === id);
+    payment.status = "paid";
+    payment.paid_at = new Date().toISOString().slice(0, 10);
     render();
     toast("Payment marked as paid.");
   } catch (error) { toast(error.message || "Could not update payment.", true); }
@@ -514,29 +453,20 @@ async function markPaid(id) {
 async function uploadReceipt(id, file) {
   if (!file) return;
   try {
-    let path = `demo/${id}/${Date.now()}-${file.name}`;
-    if (!state.isDemo) {
-      const payment = state.payments.find((item) => item.id === id);
-      path = `${state.user.id}/${id}/${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`;
-      const { error: uploadError } = await supabase.storage.from("receipts").upload(path, file, { upsert: false, contentType: file.type });
-      if (uploadError) throw uploadError;
-      const { error } = await supabase.from("payments").update({ receipt_path: path, status: "review" }).eq("id", id);
-      if (error) throw error;
-      payment.receipt_path = path;
-      payment.status = "review";
-    } else {
-      const payment = state.payments.find((item) => item.id === id);
-      payment.receipt_path = file.name;
-      payment.status = "review";
-      persistDemo();
-    }
+    const payment = state.payments.find((item) => item.id === id);
+    const path = `${state.user.id}/${id}/${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`;
+    const { error: uploadError } = await supabase.storage.from("receipts").upload(path, file, { upsert: false, contentType: file.type });
+    if (uploadError) throw uploadError;
+    const { error } = await supabase.from("payments").update({ receipt_path: path, status: "review" }).eq("id", id);
+    if (error) throw error;
+    payment.receipt_path = path;
+    payment.status = "review";
     render();
     toast("Receipt uploaded and sent for review.");
   } catch (error) { toast(error.message || "Could not upload receipt.", true); }
 }
 async function showReceipt(id) {
   const payment = state.payments.find((item) => item.id === id);
-  if (state.isDemo) return toast(`Demo receipt: ${payment.receipt_path}`);
   const { data, error } = await supabase.storage.from("receipts").createSignedUrl(payment.receipt_path, 60);
   if (error) return toast(error.message, true);
   window.open(data.signedUrl, "_blank", "noopener,noreferrer");
@@ -544,7 +474,6 @@ async function showReceipt(id) {
 async function sendSms(id) {
   const payment = state.payments.find((item) => item.id === id);
   const renter = renterById(payment.renter_id);
-  if (state.isDemo) return toast("SMS is available after connecting the SIM gateway in Render.");
   try {
     const response = await fetch("/api/sms/payment-reminder", {
       method: "POST",
@@ -566,16 +495,16 @@ document.addEventListener("click", async (event) => {
     return;
   }
   const { action, id } = target.dataset;
-  if (action === "demo-admin") return loadDemo();
-  if (action === "demo-renter") {
-    const data = structuredClone(demoSeed);
-    state = { ...state, ...data, isDemo: true, user: { id: "demo-renter", email: "maria@example.com", name: "Maria Santos" }, role: "renter", tab: "overview" };
+  if (action === "logout") {
+    if (supabase) {
+      const { error } = await supabase.auth.signOut();
+      if (error) return toast(error.message, true);
+    }
+    state.user = null;
+    state.role = null;
+    state.loginMessage = "";
     render();
     return;
-  }
-  if (action === "logout") {
-    if (!state.isDemo) await supabase.auth.signOut();
-    state.user = null; state.role = null; render(); return;
   }
   if (action === "reset-password") {
     const email = document.querySelector("#login-form input[name=email]")?.value.trim();
@@ -635,18 +564,22 @@ document.addEventListener("submit", async (event) => {
   const button = event.target.querySelector("button[type=submit]");
   button.disabled = true; button.textContent = "Signing in...";
   try {
-    if (!supabase) throw new Error("Cloud sign-in is not configured yet. Use a demo account to explore.");
+    if (!supabase) throw new Error("Cloud sign-in is not configured. Check the Render Supabase environment variables.");
     const { data, error } = await supabase.auth.signInWithPassword({ email: formData.get("email"), password: formData.get("password") });
     if (error) throw error;
     state.user = data.user;
-    state.isDemo = false;
     await fetchCloudData();
     state.tab = "overview";
+    state.loginMessage = "";
     render();
   } catch (error) {
+    if (supabase) await supabase.auth.signOut();
+    state.user = null;
+    state.role = null;
+    state.loginMessage = error.message || "Could not sign in.";
     const target = document.querySelector("#login-error");
     target.className = "notice";
-    target.textContent = error.message || "Could not sign in.";
+    target.textContent = state.loginMessage;
   } finally {
     if (button.isConnected) { button.disabled = false; button.textContent = "Sign in"; }
   }
@@ -682,12 +615,17 @@ if (supabase) {
     }
   });
   const { data: { session }, error } = await supabase.auth.getSession();
-  if (error) console.error("Could not restore sign-in:", error.message);
+  if (error) state.loginMessage = `Could not check your sign-in session: ${error.message}`;
   if (session) {
     state.user = session.user;
     state.passwordSetupRequired = passwordSetupRequired;
     try { if (!state.passwordSetupRequired) await fetchCloudData(); }
-    catch (loadError) { state.user = null; console.error("Could not load cloud data:", loadError.message); }
+    catch (loadError) {
+      await supabase.auth.signOut();
+      state.user = null;
+      state.role = null;
+      state.loginMessage = loadError.message || "Could not load your account.";
+    }
   }
 }
 render();
