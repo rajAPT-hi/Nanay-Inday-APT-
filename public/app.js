@@ -278,8 +278,13 @@ function paymentsPage() {
       <div class="stat"><div class="stat-head"><span>Receipt reviews</span><span class="stat-icon">▧</span></div><strong>${payments.filter((p) => p.status === "review").length}</strong><small>Awaiting admin approval</small></div>
     </div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>RENTER</th><th>PERIOD</th><th>BASE RENT</th><th>UTILITIES</th><th>LATE FEE</th><th>TOTAL DUE</th><th>STATUS / RECEIPT</th><th>ACTION</th></tr></thead><tbody>
-    ${payments.length ? payments.map((payment) => `<tr><td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")}</td><td>${escapeHtml(payment.period)}</td><td>${money(payment.base_amount)}</td><td>${money(payment.utility_amount)}</td><td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td><td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td><td>${statusBadge(paymentStatus(payment))}${payment.receipt_path ? `<div style="margin-top:5px"><button class="text-button" data-action="receipt" data-id="${payment.id}">View uploaded proof</button></div>` : ""}${payment.online_receipt_path ? `<div style="margin-top:5px"><button class="text-button" data-action="online-proof" data-id="${payment.id}">View online proof</button></div>` : ""}${payment.status === "paid" ? `<button class="text-button" style="display:block;margin-top:5px" data-action="print-payment-receipt" data-id="${payment.id}">View / print receipt</button><small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "online" ? "Online" : payment.payment_method === "cash" ? "Cash" : "Method not recorded"}${payment.received_by ? ` · Received by ${escapeHtml(payment.received_by)}` : ""}</small>` : ""}</td><td>${payment.status !== "paid" ? `<button class="text-button" data-action="mark-paid" data-id="${payment.id}">${payment.status === "review" ? "Approve & mark paid" : "Mark paid"}</button>${renterById(payment.renter_id).phone ? `<button class="text-button" data-action="sms" data-id="${payment.id}">Send SMS</button>` : ""}` : "—"}</td></tr>`).join("") : `<tr><td colspan="8"><div class="empty">No charges yet. Create a charge to track a payment.</div></td></tr>`}
+    ${payments.length ? payments.map((payment) => `<tr><td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")}</td><td>${escapeHtml(payment.period)}</td><td>${money(payment.base_amount)}</td><td>${money(payment.utility_amount)}</td><td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td><td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td><td>${statusBadge(paymentStatus(payment))}${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" style="display:block;margin-top:5px" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print receipt</button><small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "online" ? "Online" : payment.payment_method === "cash" ? "Cash" : "Method not recorded"}${payment.received_by ? ` · Received by ${escapeHtml(payment.received_by)}` : ""}</small>` : ""}</td><td>${payment.status !== "paid" ? `<button class="text-button" data-action="mark-paid" data-id="${escapeHtml(payment.id)}">${payment.status === "review" ? "Approve & mark paid" : "Mark paid"}</button>${renterById(payment.renter_id).phone ? `<button class="text-button" data-action="sms" data-id="${escapeHtml(payment.id)}">Send SMS</button>` : ""}` : "—"}</td></tr>`).join("") : `<tr><td colspan="8"><div class="empty">No charges yet. Create a charge to track a payment.</div></td></tr>`}
     </tbody></table></div></div>`;
+}
+function proofFileActions(payment, kind) {
+  const online = kind === "online";
+  const label = online ? "online payment proof" : "uploaded payment proof";
+  return `<div style="margin-top:5px"><button class="text-button" data-action="${online ? "online-proof" : "receipt"}" data-id="${escapeHtml(payment.id)}">View ${label}</button><button class="text-button" style="color:#a23b30" data-action="delete-payment-proof" data-kind="${kind}" data-id="${escapeHtml(payment.id)}">Delete proof</button></div>`;
 }
 function renterPaymentHistoryModal(renterId) {
   const renter = renterById(renterId);
@@ -295,7 +300,7 @@ function renterPaymentHistoryModal(renterId) {
       <td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td>
       <td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td>
       <td>${statusBadge(paymentStatus(payment))}</td>
-      <td>${payment.status === "paid" ? `<button class="text-button" data-action="print-payment-receipt" data-id="${payment.id}">View / print</button>` : payment.receipt_path ? `<button class="text-button" data-action="receipt" data-id="${payment.id}">View uploaded proof</button>` : "Available after payment is confirmed"}</td>
+      <td>${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print generated receipt</button>` : !payment.receipt_path ? "Available after payment is confirmed" : ""}</td>
     </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">No charges or payments have been recorded for this renter yet.</div>`;
   modal(`Payment history · ${escapeHtml(renter.full_name)}`, `<p class="muted-note">Complete payment history for ${escapeHtml(renter.unit_name)} · ${escapeHtml(renter.location || "Location not set")}</p>${rows}`,
@@ -340,6 +345,7 @@ function renterPage() {
   if (!renter) return `<div class="card"><div class="empty"><span>⌂</span>Your rental details will appear here once the administrator links your renter account.</div></div>`;
   const payments = state.payments.filter((payment) => payment.renter_id === renter.id);
   const outstanding = payments.filter((p) => p.status !== "paid").reduce((t, p) => t + Number(p.amount) + lateFee(p), 0);
+  const proofUploadPayments = payments.filter((payment) => payment.status !== "paid" && !payment.receipt_path);
   return `<section class="welcome renter-hero"><div><h2>Welcome, ${escapeHtml(renter.full_name.split(" ")[0])} 👋</h2><p>Your home at ${escapeHtml(renter.unit_name)} · ${escapeHtml(renter.rental_type)} · ${escapeHtml(renter.location || "Location not set")}</p></div><span class="status-pill">Contract ends ${formatDate(renter.contract_end)}</span></section>
     <section class="renter-bill">
       <div class="bill-line"><span>Monthly rent</span><strong>${money(renter.rent_amount)}</strong></div>
@@ -347,8 +353,12 @@ function renterPage() {
       <div class="bill-line"><span>Outstanding balance</span><strong>${money(outstanding)}</strong></div>
       <div class="bill-line"><span>Contract term</span><strong>${renter.contract_months} months</strong></div>
     </section>
-    <div class="card"><div class="card-head"><h3>My payment history</h3><button class="button secondary" data-action="refresh-payment-history">Refresh</button></div><p class="muted-note">Charges appear here after the administrator creates them. Your printable receipt appears after the administrator confirms payment.</p>
-      ${payments.length ? `<div class="table-wrap"><table><thead><tr><th>PERIOD</th><th>DUE DATE</th><th>RENT + UTILITIES</th><th>LATE FEE</th><th>STATUS</th><th>RECEIPT</th></tr></thead><tbody>${payments.map((p) => `<tr><td>${escapeHtml(p.period)}</td><td>${formatDate(p.due_date)}</td><td>${money(p.amount)}</td><td>${money(p.status === "paid" ? p.late_fee_amount : lateFee(p))}</td><td>${statusBadge(paymentStatus(p))}</td><td>${p.status === "paid" ? `<button class="text-button" data-action="print-payment-receipt" data-id="${p.id}">View / print receipt</button>` : p.receipt_path ? "Proof uploaded · awaiting review" : `<button class="text-button" data-action="upload-receipt" data-id="${p.id}">Upload payment proof</button>`}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No rental charges have been added yet.</div>`}
+    <div class="card" style="margin-bottom:17px"><div class="card-head"><div><h3>Upload online payment proof</h3><p class="muted-note">For an online transfer, upload its receipt or screenshot so the administrator can review it.</p></div></div>
+      ${proofUploadPayments.length ? proofUploadPayments.map((payment) => `<div class="bill-line"><span>${escapeHtml(payment.period)} · Due ${formatDate(payment.due_date)} · ${money(Number(payment.amount) + lateFee(payment))}</span><button class="button secondary" data-action="upload-receipt" data-id="${escapeHtml(payment.id)}">Choose proof file</button></div>`).join("") : `<p class="muted-note">There are no unpaid charges waiting for proof right now.</p>`}
+      <small class="muted-note">Accepted files: JPG, PNG, WebP, or PDF. Maximum size: 10 MB.</small>
+    </div>
+    <div class="card"><div class="card-head"><h3>My payment history</h3><button class="button secondary" data-action="refresh-payment-history">Refresh</button></div><p class="muted-note">Charges appear here after the administrator creates them. If you paid online, upload your transfer receipt or screenshot (JPG, PNG, WebP, or PDF, up to 10 MB) for review. Your printable receipt appears after the administrator confirms payment.</p>
+      ${payments.length ? `<div class="table-wrap"><table><thead><tr><th>PERIOD</th><th>DUE DATE</th><th>RENT + UTILITIES</th><th>LATE FEE</th><th>STATUS</th><th>RECEIPT</th></tr></thead><tbody>${payments.map((p) => `<tr><td>${escapeHtml(p.period)}</td><td>${formatDate(p.due_date)}</td><td>${money(p.amount)}</td><td>${money(p.status === "paid" ? p.late_fee_amount : lateFee(p))}</td><td>${statusBadge(paymentStatus(p))}</td><td>${p.status === "paid" ? `<button class="text-button" data-action="print-payment-receipt" data-id="${escapeHtml(p.id)}">View / print receipt</button>` : p.receipt_path ? "Proof uploaded · awaiting review" : `<button class="text-button" data-action="upload-receipt" data-id="${escapeHtml(p.id)}">Upload digital payment proof</button>`}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No rental charges have been added yet.</div>`}
     </div>`;
 }
 
@@ -928,18 +938,83 @@ async function markPaid() {
 }
 async function uploadReceipt(id, file) {
   if (!file) return;
+  if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) {
+    return toast("Choose a JPG, PNG, WebP, or PDF payment proof.", true);
+  }
+  if (file.size > 10 * 1024 * 1024) return toast("The payment proof must be 10 MB or smaller.", true);
+  let path = null;
+  let uploaded = false;
   try {
     const payment = state.payments.find((item) => item.id === id);
-    const path = `${state.user.id}/${id}/${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`;
+    if (!payment || payment.status === "paid" || payment.receipt_path) {
+      throw new Error("This payment can no longer accept a proof upload. Refresh your payment history.");
+    }
+    path = `${state.user.id}/${id}/${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`;
     const { error: uploadError } = await supabase.storage.from("receipts").upload(path, file, { upsert: false, contentType: file.type });
     if (uploadError) throw uploadError;
-    const { error } = await supabase.from("payments").update({ receipt_path: path, status: "review" }).eq("id", id);
+    uploaded = true;
+    const { data: updated, error } = await supabase.from("payments").update({ receipt_path: path, status: "review" })
+      .eq("id", id).eq("status", payment.status).is("receipt_path", null).select("id").maybeSingle();
     if (error) throw error;
+    if (!updated) throw new Error("This payment changed while the proof was uploading. Refresh your payment history and try again if it is still unpaid.");
     payment.receipt_path = path;
     payment.status = "review";
     render();
     toast("Receipt uploaded and sent for review.");
-  } catch (error) { toast(error.message || "Could not upload receipt.", true); }
+  } catch (error) {
+    let cleanupMessage = "";
+    if (uploaded) {
+      const { error: cleanupError } = await supabase.storage.from("receipts").remove([path]);
+      if (cleanupError) {
+        console.error("Could not remove renter proof after a failed upload:", cleanupError.message);
+        cleanupMessage = " The uploaded file may remain in storage; contact the administrator if it appears in your history.";
+      }
+    }
+    toast(`${error.message || "Could not upload receipt."}${cleanupMessage}`, true);
+  }
+}
+async function deletePaymentProof(id, kind) {
+  if (state.role !== "admin") return toast("Only an administrator can delete payment proof.", true);
+  const payment = state.payments.find((item) => item.id === id);
+  const online = kind === "online";
+  const field = online ? "online_receipt_path" : "receipt_path";
+  const bucket = online ? "payment-proofs" : "receipts";
+  const path = payment?.[field];
+  if (!payment || !path) return toast("This uploaded proof is no longer available. Refresh the payment history.", true);
+  const label = online ? "online payment proof" : "renter-uploaded payment proof";
+  if (!window.confirm(`Delete this ${label}? The payment history and generated receipt will remain unchanged.`)) return;
+
+  const wasUnderReview = !online && payment.status === "review";
+  const restoredStatus = wasUnderReview ? "pending" : payment.status;
+  try {
+    const { data: updated, error } = await supabase.from("payments")
+      .update({ [field]: null, ...(wasUnderReview ? { status: "pending" } : {}) })
+      .eq("id", id).eq(field, path).select("id").maybeSingle();
+    if (error) throw error;
+    if (!updated) throw new Error("This proof changed before it could be deleted. Refresh the payment history and try again.");
+
+    const { error: storageError } = await supabase.storage.from(bucket).remove([path]);
+    if (storageError) {
+      const { data: restored, error: restoreError } = await supabase.from("payments")
+        .update({ [field]: path, ...(wasUnderReview ? { status: "review" } : {}) })
+        .eq("id", id).is(field, null).eq("status", restoredStatus).select("id").maybeSingle();
+      if (restoreError || !restored) {
+        throw new Error(`Storage could not delete the file (${storageError.message}), and the payment record could not be restored. Contact the administrator before retrying.`);
+      }
+      throw storageError;
+    }
+
+    payment[field] = null;
+    if (wasUnderReview) payment.status = "pending";
+    if (document.querySelector(".modal-backdrop") && state.tab === "renters") {
+      renterPaymentHistoryModal(payment.renter_id);
+    } else {
+      render();
+    }
+    toast("Uploaded proof deleted. Payment history was retained.");
+  } catch (error) {
+    toast(error.message || "Could not delete the uploaded proof.", true);
+  }
 }
 async function showReceipt(id) {
   const payment = state.payments.find((item) => item.id === id);
@@ -1051,12 +1126,13 @@ document.addEventListener("click", async (event) => {
   if (action === "confirm-payment") return markPaid();
   if (action === "receipt") return showReceipt(id);
   if (action === "online-proof") return showOnlineProof(id);
+  if (action === "delete-payment-proof") return deletePaymentProof(id, target.dataset.kind);
   if (action === "print-payment-receipt") return printPaymentReceipt(id);
   if (action === "refresh-payment-history") return refreshPaymentHistory();
   if (action === "sms") return sendSms(id);
   if (action === "upload-receipt") {
     const input = document.createElement("input");
-    input.type = "file"; input.accept = "image/*,.pdf";
+    input.type = "file"; input.accept = "image/jpeg,image/png,image/webp,application/pdf";
     input.onchange = () => uploadReceipt(id, input.files?.[0]);
     input.click();
   }

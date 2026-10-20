@@ -678,6 +678,11 @@ create policy "Renter and admin read receipts"
     )
   );
 
+drop policy if exists "Admins delete uploaded receipts" on storage.objects;
+create policy "Admins delete uploaded receipts"
+  on storage.objects for delete to authenticated
+  using (bucket_id = 'receipts' and (select public.is_admin()));
+
 revoke all on function public.is_admin() from public;
 grant execute on function public.is_admin() to authenticated;
 revoke all on function public.admin_update_lease(uuid, text, text, text, integer, date, date, numeric, integer, text) from public;
