@@ -203,6 +203,23 @@ function formatDate(date) {
   if (!date) return "—";
   return new Date(`${String(date).slice(0, 10)}T00:00:00`).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
 }
+function dayLabel(day) {
+  const value = Number(day);
+  const suffix = value % 100 >= 11 && value % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[value % 10] || "th");
+  return `${value}${suffix}`;
+}
+function nextRentDueDate(day, from = new Date()) {
+  const dueDay = Number(day);
+  const dateForMonth = (year, month) => new Date(year, month, Math.min(dueDay, new Date(year, month + 1, 0).getDate()));
+  const currentMonthDue = dateForMonth(from.getFullYear(), from.getMonth());
+  const dueDate = currentMonthDue >= new Date(from.getFullYear(), from.getMonth(), from.getDate())
+    ? currentMonthDue
+    : dateForMonth(from.getFullYear(), from.getMonth() + 1);
+  const year = dueDate.getFullYear();
+  const month = String(dueDate.getMonth() + 1).padStart(2, "0");
+  const dayOfMonth = String(dueDate.getDate()).padStart(2, "0");
+  return `${year}-${month}-${dayOfMonth}`;
+}
 function calculateContractEnd(start, months) {
   const [year, month, day] = start.split("-").map(Number);
   const targetMonth = month - 1 + Number(months);
@@ -213,13 +230,13 @@ function calculateContractEnd(start, months) {
 }
 function renderRenterTable(renters) {
   if (!renters.length) return `<div class="empty"><span>♙</span>No renters yet. Add your first renter to get started.</div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>RENTER</th><th>UNIT</th><th>RENT / MONTH</th><th>CONTRACT ENDS</th><th>STATUS</th><th>LEASE / DOCUMENTS</th></tr></thead><tbody>
-    ${renters.map((renter) => `<tr><td><div class="person-cell"><div class="avatar">${initials(renter.full_name)}</div><div><strong>${escapeHtml(renter.full_name)}</strong><small>${escapeHtml(renter.email)}</small></div></div></td><td>${escapeHtml(renter.unit_name)}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renter.rental_type)}</small></td><td>${money(renter.rent_amount)}</td><td>${formatDate(renter.contract_end)}</td><td>${statusBadge(contractStatus(renter))}</td><td>${renter.status !== "terminated" ? `<button class="text-button" data-action="edit-lease" data-id="${renter.id}">Edit lease</button><button class="text-button" style="color:var(--red)" data-action="terminate-lease" data-id="${renter.id}">Terminate</button>` : ""}<button class="text-button" data-action="renter-documents" data-id="${renter.id}">Documents</button><button class="text-button" data-action="lease-history" data-id="${renter.id}">History</button>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${renter.id}">Password</button>` : ""}</td></tr>`).join("")}
+  return `<div class="table-wrap"><table><thead><tr><th>RENTER</th><th>UNIT / LOCATION</th><th>RENT / MONTH</th><th>RENT DUE</th><th>CONTRACT ENDS</th><th>STATUS</th><th>LEASE / DOCUMENTS</th></tr></thead><tbody>
+    ${renters.map((renter) => `<tr><td><div class="person-cell"><div class="avatar">${initials(renter.full_name)}</div><div><strong>${escapeHtml(renter.full_name)}</strong><small>${escapeHtml(renter.email)}</small></div></div></td><td>${escapeHtml(renter.unit_name)}<small style="display:block;color:#89958d;margin-top:3px">${escapeHtml(renter.rental_type)} · ${escapeHtml(renter.location || "Location not set")}</small></td><td>${money(renter.rent_amount)}</td><td>${dayLabel(renter.rent_due_day)} of each month</td><td>${formatDate(renter.contract_end)}</td><td>${statusBadge(contractStatus(renter))}</td><td>${renter.status !== "terminated" ? `<button class="text-button" data-action="edit-lease" data-id="${renter.id}">Edit lease</button><button class="text-button" style="color:var(--red)" data-action="terminate-lease" data-id="${renter.id}">Terminate</button>` : ""}<button class="text-button" data-action="renter-documents" data-id="${renter.id}">Documents</button><button class="text-button" data-action="lease-history" data-id="${renter.id}">History</button>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${renter.id}">Password</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>`;
 }
 function rentersPage() {
   return `<div class="section-title"><div><p>Manage lease terms, record the reason for changes, terminate leases, and securely store renter documents.</p></div></div>
-    <div class="toolbar"><input class="search" id="renter-search" placeholder="⌕  Search renters or units..." /><select class="filter" id="renter-filter"><option value="all">All rental types</option><option>Room</option><option>House</option><option>Apartment</option></select></div>
+    <div class="toolbar"><input class="search" id="renter-search" placeholder="⌕  Search renters, units, or locations..." /><select class="filter" id="renter-filter"><option value="all">All rental types</option><option>Room</option><option>House</option><option>Apartment</option></select><select class="filter" id="renter-location-filter"><option value="all">All locations</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag"].map((location) => `<option>${location}</option>`).join("")}</select></div>
     <div class="card" id="renter-table">${renderRenterTable(state.renters)}</div>`;
 }
 function paymentsPage() {
@@ -274,9 +291,10 @@ function renterPage() {
   if (!renter) return `<div class="card"><div class="empty"><span>⌂</span>Your rental details will appear here once the administrator links your renter account.</div></div>`;
   const payments = state.payments.filter((payment) => payment.renter_id === renter.id);
   const outstanding = payments.filter((p) => p.status !== "paid").reduce((t, p) => t + Number(p.amount) + lateFee(p), 0);
-  return `<section class="welcome renter-hero"><div><h2>Welcome, ${escapeHtml(renter.full_name.split(" ")[0])} 👋</h2><p>Your home at ${escapeHtml(renter.unit_name)} · ${escapeHtml(renter.rental_type)}</p></div><span class="status-pill">Contract ends ${formatDate(renter.contract_end)}</span></section>
+  return `<section class="welcome renter-hero"><div><h2>Welcome, ${escapeHtml(renter.full_name.split(" ")[0])} 👋</h2><p>Your home at ${escapeHtml(renter.unit_name)} · ${escapeHtml(renter.rental_type)} · ${escapeHtml(renter.location || "Location not set")}</p></div><span class="status-pill">Contract ends ${formatDate(renter.contract_end)}</span></section>
     <section class="renter-bill">
       <div class="bill-line"><span>Monthly rent</span><strong>${money(renter.rent_amount)}</strong></div>
+      <div class="bill-line"><span>Rent due each month</span><strong>${dayLabel(renter.rent_due_day)}</strong></div>
       <div class="bill-line"><span>Outstanding balance</span><strong>${money(outstanding)}</strong></div>
       <div class="bill-line"><span>Contract term</span><strong>${renter.contract_months} months</strong></div>
     </section>
@@ -317,10 +335,12 @@ function addRenterModal() {
   modal("Add a new renter", `<form id="renter-form"><div class="form-grid">
     <div class="field"><label>Full name</label><input name="full_name" required /></div><div class="field"><label>Email for renter login</label><input name="email" type="email" required /></div>
     <div class="field"><label>Phone number</label><input name="phone" type="tel" placeholder="+63..." /></div><div class="field"><label>Unit name / number</label><input name="unit_name" placeholder="Room 01" required /></div>
+    <div class="field"><label>Rental location</label><select name="location" required><option value="">Select location</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag"].map((location) => `<option>${location}</option>`).join("")}</select></div>
     <div class="field"><label>Rental type</label><select name="rental_type"><option>Room</option><option>House</option><option>Apartment</option></select></div>
     <div class="field"><label>Contract term</label><select name="contract_months"><option value="6">6 months</option><option value="12">1 year (12 months)</option></select></div>
     <div class="field"><label>Contract start</label><input name="contract_start" type="date" value="${start}" required /></div>
     <div class="field"><label>Monthly rent (PHP)</label><input name="rent_amount" type="number" min="0" step="0.01" required /></div>
+    <div class="field"><label>Rent due day (each month)</label><input name="rent_due_day" type="number" min="1" max="31" step="1" value="5" required /></div>
     <div class="field"><label>Renter login password</label><input name="password" type="password" autocomplete="new-password" minlength="12" required /></div>
     <div class="field full notice">Set a temporary password with at least 12 characters. Share it with the renter privately, and ask them to change it after signing in. The password is sent directly to Supabase Auth and is never saved in the rental record.</div></div></form>`,
   `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-renter">Add renter</button>`);
@@ -339,9 +359,11 @@ function editLeaseModal(renterId) {
   if (renter.status === "terminated") return toast("Terminated leases cannot be edited.", true);
   modal(`Edit lease · ${escapeHtml(renter.full_name)}`, `<form id="lease-form" data-renter-id="${escapeHtml(renterId)}"><div class="form-grid">
     <div class="field"><label>Unit name / number</label><input name="unit_name" value="${escapeHtml(renter.unit_name)}" required /></div>
+    <div class="field"><label>Rental location</label><select name="location" required>${renter.location ? "" : '<option value="" disabled selected>Select location</option>'}${["Vasquez", "Villa", "Cabalawan", "Kaskag"].map((location) => `<option ${renter.location === location ? "selected" : ""}>${location}</option>`).join("")}</select></div>
     <div class="field"><label>Rental type</label><select name="rental_type" required>${["Room", "House", "Apartment"].map((type) => `<option ${renter.rental_type === type ? "selected" : ""}>${type}</option>`).join("")}</select></div>
     <div class="field"><label>Contract term</label><select name="contract_months" required><option value="6" ${Number(renter.contract_months) === 6 ? "selected" : ""}>6 months</option><option value="12" ${Number(renter.contract_months) === 12 ? "selected" : ""}>1 year (12 months)</option></select></div>
     <div class="field"><label>Monthly rent (PHP)</label><input name="rent_amount" type="number" min="0" step=".01" value="${Number(renter.rent_amount)}" required /></div>
+    <div class="field"><label>Rent due day (each month)</label><input name="rent_due_day" type="number" min="1" max="31" step="1" value="${Number(renter.rent_due_day || 5)}" required /></div>
     <div class="field"><label>Contract start</label><input name="contract_start" type="date" value="${escapeHtml(renter.contract_start)}" required /></div>
     <div class="field"><label>Contract end (calculated)</label><input name="contract_end" type="date" value="${escapeHtml(renter.contract_end)}" readonly required /></div>
     <div class="field full"><label>Required reason for this change</label><textarea name="reason" minlength="3" maxlength="1000" placeholder="Example: Monthly rent increased by agreement" required></textarea></div>
@@ -385,11 +407,13 @@ async function saveLease() {
     const { error } = await supabase.rpc("admin_update_lease", {
       p_renter_id: form.dataset.renterId,
       p_unit_name: values.unit_name,
+      p_location: values.location,
       p_rental_type: values.rental_type,
       p_contract_months: Number(values.contract_months),
       p_contract_start: values.contract_start,
       p_contract_end: values.contract_end,
       p_rent_amount: Number(values.rent_amount),
+      p_rent_due_day: Number(values.rent_due_day),
       p_reason: values.reason.trim(),
     });
     if (error) throw error;
@@ -453,16 +477,21 @@ async function viewRenterDocument(renterId, kind) {
 }
 function addPaymentModal() {
   const today = new Date();
-  const defaultDue = new Date(today.getFullYear(), today.getMonth(), 5).toISOString().slice(0, 10);
+  const renters = activeRenters();
+  const defaultDue = nextRentDueDate(renters[0]?.rent_due_day || 5, today);
   modal("Create a rental charge", `<form id="payment-form"><div class="form-grid">
-    <div class="field full"><label>Renter</label><select name="renter_id" required>${activeRenters().map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)} · ${escapeHtml(r.unit_name)}</option>`).join("")}</select></div>
+    <div class="field full"><label>Renter</label><select name="renter_id" required>${renters.map((r) => `<option value="${r.id}">${escapeHtml(r.full_name)} · ${escapeHtml(r.unit_name)}</option>`).join("")}</select></div>
     <div class="field"><label>Charge period</label><input name="period" value="${today.toLocaleDateString("en-PH", { month: "long", year: "numeric" })}" required /></div>
     <div class="field"><label>Due date</label><input name="due_date" type="date" value="${defaultDue}" required /></div>
     <div class="field"><label>Base rent (PHP)</label><input name="base_amount" type="number" min="0" step=".01" required /></div>
     <div class="field"><label>Utilities (PHP)</label><input name="utility_amount" type="number" min="0" step=".01" value="0" required /></div>
     </div></form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-payment">Create charge</button>`);
   const form = document.querySelector("#payment-form");
-  form.elements.renter_id.addEventListener("change", () => { form.elements.base_amount.value = renterById(form.elements.renter_id.value).rent_amount || 0; });
+  form.elements.renter_id.addEventListener("change", () => {
+    const renter = renterById(form.elements.renter_id.value);
+    form.elements.base_amount.value = renter.rent_amount || 0;
+    form.elements.due_date.value = nextRentDueDate(renter.rent_due_day || 5, today);
+  });
   form.elements.base_amount.value = renterById(form.elements.renter_id.value).rent_amount || 0;
 }
 function addUtilityModal() {
@@ -541,7 +570,8 @@ async function saveRenter() {
   const data = Object.fromEntries(new FormData(form));
   const renter = {
     full_name: data.full_name.trim(), email: data.email.trim(), phone: data.phone.trim(),
-    unit_name: data.unit_name.trim(), rental_type: data.rental_type, contract_months: Number(data.contract_months),
+    unit_name: data.unit_name.trim(), location: data.location, rent_due_day: Number(data.rent_due_day),
+    rental_type: data.rental_type, contract_months: Number(data.contract_months),
     contract_start: data.contract_start, contract_end: calculateContractEnd(data.contract_start, data.contract_months), rent_amount: Number(data.rent_amount),
   };
   try {
@@ -554,6 +584,8 @@ async function saveRenter() {
           name: renter.full_name,
           phone: renter.phone,
           unitName: renter.unit_name,
+          location: renter.location,
+          rentDueDay: renter.rent_due_day,
           rentalType: renter.rental_type,
           contractMonths: renter.contract_months,
           contractStart: renter.contract_start,
@@ -843,25 +875,23 @@ document.addEventListener("submit", async (event) => {
   }
 });
 document.addEventListener("input", (event) => {
-  if (event.target.matches("[data-setting='electricity_total_bill'], [data-setting='electricity_total_usage']")) {
-    const bill = Number(document.querySelector("[data-setting='electricity_total_bill']")?.value);
-    const usage = Number(document.querySelector("[data-setting='electricity_total_usage']")?.value);
-    const preview = document.querySelector("#electricity-rate-preview");
-    if (preview) {
-      preview.textContent = bill > 0 && usage > 0
-        ? `Calculated rate: ₱${(bill / usage).toFixed(4)} per kWh (${bill.toFixed(2)} ÷ ${usage.toFixed(2)})`
-        : "Enter a total bill and kWh greater than zero to calculate the rate.";
-    }
-  }
-  if (!event.target.matches("#renter-search, #renter-filter")) return;
+  if (event.target.matches("[data-setting='electricity_total_bill'], [data-setting='electricity_total_usage']")) updateElectricityRatePreview();
+  if (event.target.matches("#renter-search")) updateRenterTableFromFilters();
+});
+document.addEventListener("change", (event) => {
+  if (event.target.matches("#renter-filter, #renter-location-filter")) updateRenterTableFromFilters();
+});
+function updateRenterTableFromFilters() {
   const query = document.querySelector("#renter-search")?.value.toLowerCase() || "";
   const type = document.querySelector("#renter-filter")?.value || "all";
+  const location = document.querySelector("#renter-location-filter")?.value || "all";
   const matches = state.renters.filter((renter) =>
     (type === "all" || renter.rental_type === type) &&
-    `${renter.full_name} ${renter.email} ${renter.unit_name}`.toLowerCase().includes(query));
+    (location === "all" || renter.location === location) &&
+    `${renter.full_name} ${renter.email} ${renter.unit_name} ${renter.location || ""}`.toLowerCase().includes(query));
   const table = document.querySelector("#renter-table");
   if (table) table.innerHTML = renderRenterTable(matches);
-});
+}
 window.addEventListener("error", (event) => console.error("Application error:", event.error || event.message));
 
 if (supabase) {

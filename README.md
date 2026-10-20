@@ -50,7 +50,9 @@ Open `http://localhost:3000` and sign in with an account created in Supabase Aut
 
 The schema enables row-level security. Renters can only read their own rental, charges, and utility bills, and can submit a receipt for an unpaid charge. Administrators manage renter records, rates, bills, and payment status. Receipt files are kept in a private Storage bucket and are shown with short-lived signed links.
 
-From **Renters & leases**, administrators can edit an active renter's unit, rental type, term, dates, and monthly rent. Every edit requires a reason and creates a before/after audit entry visible under **History**. Lease termination also requires a reason, disables the linked renter account in the app, and preserves the renter, payment history, and documents for administrator review. Terminated renters cannot submit receipts or access rental data.
+When creating a renter, administrators select a rental location (Vasquez, Villa, Cabalawan, or Kaskag) and set the recurring rent due day (1–31). New rental charges default to the renter's next due date; months shorter than the selected due day use that month's last calendar day.
+
+From **Renters & leases**, administrators can edit an active renter's unit, location, rental type, term, dates, rent due day, and monthly rent. Every edit requires a reason and creates a before/after audit entry visible under **History**. Lease termination also requires a reason, disables the linked renter account in the app, and preserves the renter, payment history, and documents for administrator review. Terminated renters cannot submit receipts or access rental data.
 
 Administrators can upload or replace renter ID and signed physical contract images under **Documents**. Supported formats are JPG, PNG, and WebP, up to 10 MB per image. These files are stored in a private, admin-only Supabase Storage bucket; the app opens an administrator-only, short-lived signed link when a document is viewed. Apply the latest `supabase/schema.sql` before using these features.
 

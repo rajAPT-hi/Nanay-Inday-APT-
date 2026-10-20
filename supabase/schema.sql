@@ -19,11 +19,13 @@ create table if not exists public.renters (
   email text not null,
   phone text not null default '',
   unit_name text not null,
+  location text check (location in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag')),
   rental_type text not null check (rental_type in ('Room', 'House', 'Apartment')),
   contract_months integer not null check (contract_months in (6, 12)),
   contract_start date not null,
   contract_end date not null,
   rent_amount numeric(12,2) not null check (rent_amount >= 0),
+  rent_due_day integer not null default 5 check (rent_due_day between 1 and 31),
   status text not null default 'active' check (status in ('active', 'terminated')),
   terminated_at timestamptz,
   termination_reason text,
@@ -37,7 +39,17 @@ alter table public.renters
   add column if not exists terminated_at timestamptz,
   add column if not exists termination_reason text,
   add column if not exists id_image_path text,
-  add column if not exists contract_image_path text;
+  add column if not exists contract_image_path text,
+  add column if not exists location text,
+  add column if not exists rent_due_day integer not null default 5;
+
+alter table public.renters
+  drop constraint if exists renters_location_check,
+  drop constraint if exists renters_rent_due_day_check;
+
+alter table public.renters
+  add constraint renters_location_check check (location is null or location in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag')),
+  add constraint renters_rent_due_day_check check (rent_due_day between 1 and 31);
 
 do $$
 begin
@@ -135,14 +147,19 @@ insert into public.settings (key, value) values
   ('grace_period_days', '3'::jsonb)
 on conflict (key) do nothing;
 
-create or replace function public.admin_update_lease(
+drop function if exists public.admin_update_lease(uuid, text, text, integer, date, date, numeric, text);
+drop function if exists public.admin_update_lease(uuid, text, text, text, integer, date, date, numeric, integer, text);
+
+create function public.admin_update_lease(
   p_renter_id uuid,
   p_unit_name text,
+  p_location text,
   p_rental_type text,
   p_contract_months integer,
   p_contract_start date,
   p_contract_end date,
   p_rent_amount numeric,
+  p_rent_due_day integer,
   p_reason text
 )
 returns public.renters
@@ -161,10 +178,12 @@ begin
     raise exception 'A reason of at least 3 characters is required.';
   end if;
   if p_unit_name is null or length(trim(p_unit_name)) = 0
+    or p_location is null or p_location not in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag')
     or p_rental_type is null or p_rental_type not in ('Room', 'House', 'Apartment')
     or p_contract_months is null or p_contract_months not in (6, 12)
     or p_contract_start is null or p_contract_end is null or p_contract_end < p_contract_start
-    or p_rent_amount is null or p_rent_amount < 0 then
+    or p_rent_amount is null or p_rent_amount < 0
+    or p_rent_due_day is null or p_rent_due_day not between 1 and 31 then
     raise exception 'Lease details are invalid.';
   end if;
 
@@ -181,11 +200,13 @@ begin
 
   update public.renters
   set unit_name = trim(p_unit_name),
+      location = p_location,
       rental_type = p_rental_type,
       contract_months = p_contract_months,
       contract_start = p_contract_start,
       contract_end = p_contract_end,
-      rent_amount = p_rent_amount
+      rent_amount = p_rent_amount,
+      rent_due_day = p_rent_due_day
   where id = p_renter_id
   returning * into updated_renter;
 
@@ -195,19 +216,23 @@ begin
     p_renter_id, auth.uid(), 'lease_updated', trim(p_reason),
     jsonb_build_object(
       'unit_name', current_renter.unit_name,
+      'location', current_renter.location,
       'rental_type', current_renter.rental_type,
       'contract_months', current_renter.contract_months,
       'contract_start', current_renter.contract_start,
       'contract_end', current_renter.contract_end,
-      'rent_amount', current_renter.rent_amount
+      'rent_amount', current_renter.rent_amount,
+      'rent_due_day', current_renter.rent_due_day
     ),
     jsonb_build_object(
       'unit_name', updated_renter.unit_name,
+      'location', updated_renter.location,
       'rental_type', updated_renter.rental_type,
       'contract_months', updated_renter.contract_months,
       'contract_start', updated_renter.contract_start,
       'contract_end', updated_renter.contract_end,
-      'rent_amount', updated_renter.rent_amount
+      'rent_amount', updated_renter.rent_amount,
+      'rent_due_day', updated_renter.rent_due_day
     )
   );
   return updated_renter;
@@ -596,8 +621,8 @@ create policy "Renter and admin read receipts"
 
 revoke all on function public.is_admin() from public;
 grant execute on function public.is_admin() to authenticated;
-revoke all on function public.admin_update_lease(uuid, text, text, integer, date, date, numeric, text) from public;
-grant execute on function public.admin_update_lease(uuid, text, text, integer, date, date, numeric, text) to authenticated;
+revoke all on function public.admin_update_lease(uuid, text, text, text, integer, date, date, numeric, integer, text) from public;
+grant execute on function public.admin_update_lease(uuid, text, text, text, integer, date, date, numeric, integer, text) to authenticated;
 revoke all on function public.admin_terminate_lease(uuid, text) from public;
 grant execute on function public.admin_terminate_lease(uuid, text) to authenticated;
 revoke all on function public.admin_create_utility_bill(uuid, text, date, numeric, numeric, numeric) from public;

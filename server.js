@@ -49,7 +49,9 @@ app.post("/api/admin/renters", requireAdmin, async (req, res) => {
   const requiredText = ["email", "name", "unitName", "rentalType", "contractStart"];
   if (requiredText.some((key) => typeof body[key] !== "string" || !body[key].trim()) ||
       !["Room", "House", "Apartment"].includes(body.rentalType) ||
+      !["Vasquez", "Villa", "Cabalawan", "Kaskag"].includes(body.location) ||
       ![6, 12].includes(Number(body.contractMonths)) ||
+      !Number.isInteger(body.rentDueDay) || body.rentDueDay < 1 || body.rentDueDay > 31 ||
       typeof body.rentAmount !== "number" || !Number.isFinite(body.rentAmount) || body.rentAmount < 0 ||
       typeof body.password !== "string" || body.password.length < 12 ||
       !/^\d{4}-\d{2}-\d{2}$/.test(body.contractStart) ||
@@ -74,11 +76,13 @@ app.post("/api/admin/renters", requireAdmin, async (req, res) => {
     email: body.email.trim(),
     phone: typeof body.phone === "string" ? body.phone.trim() : "",
     unit_name: body.unitName.trim(),
+    location: body.location,
     rental_type: body.rentalType,
     contract_months: Number(body.contractMonths),
     contract_start: body.contractStart,
     contract_end: body.contractEnd,
     rent_amount: body.rentAmount,
+    rent_due_day: Number(body.rentDueDay),
   }).select().single();
 
   if (renterError) {
