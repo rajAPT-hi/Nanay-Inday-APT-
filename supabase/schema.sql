@@ -135,6 +135,27 @@ create unique index if not exists payments_one_auto_rent_charge_per_due_date
   on public.payments (renter_id, due_date)
   where auto_generated;
 
+create table if not exists public.cleared_payment_charges (
+  id uuid primary key default gen_random_uuid(),
+  payment_id uuid not null unique,
+  renter_id uuid not null,
+  period text not null,
+  due_date date not null,
+  base_amount numeric(12,2) not null,
+  utility_amount numeric(12,2) not null,
+  amount numeric(12,2) not null,
+  status text not null,
+  reason text not null,
+  cleared_by uuid not null,
+  receipt_path text,
+  online_receipt_path text,
+  cleared_at timestamptz not null default now()
+);
+
+alter table public.cleared_payment_charges enable row level security;
+revoke all on public.cleared_payment_charges from public, anon, authenticated;
+grant select on public.cleared_payment_charges to authenticated;
+
 alter table public.payments
   drop constraint if exists payments_payment_method_check,
   drop constraint if exists payments_late_fee_amount_check,
@@ -197,7 +218,13 @@ begin
       where existing_payment.renter_id = renter_row.id
         and existing_payment.due_date = due_date_value
         and existing_payment.period not like '%Utilities'
-    ) then
+    )
+      and not exists (
+        select 1
+        from public.cleared_payment_charges cleared_charge
+        where cleared_charge.renter_id = renter_row.id
+          and cleared_charge.due_date = due_date_value
+      ) then
       insert into public.payments as scheduled_payment (
         renter_id, period, due_date, base_amount, utility_amount, amount, status, auto_generated
       ) values (
@@ -657,6 +684,57 @@ as $$
   );
 $$;
 
+create or replace function public.admin_clear_payment_charge(p_payment_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  payment_row public.payments;
+  clean_reason text := btrim(p_reason);
+begin
+  if not public.is_admin() then
+    raise exception 'Administrator access is required.';
+  end if;
+
+  if clean_reason is null or length(clean_reason) < 3 or length(clean_reason) > 1000 then
+    raise exception 'Enter a reason between 3 and 1000 characters.';
+  end if;
+
+  select * into payment_row
+  from public.payments
+  where id = p_payment_id
+  for update;
+
+  if not found then
+    raise exception 'This charge no longer exists.';
+  end if;
+  if payment_row.status = 'paid' then
+    raise exception 'Paid charges cannot be cleared.';
+  end if;
+
+  insert into public.cleared_payment_charges (
+    payment_id, renter_id, period, due_date, base_amount, utility_amount, amount,
+    status, reason, cleared_by, receipt_path, online_receipt_path
+  ) values (
+    payment_row.id, payment_row.renter_id, payment_row.period, payment_row.due_date,
+    payment_row.base_amount, payment_row.utility_amount, payment_row.amount,
+    payment_row.status, clean_reason, auth.uid(), payment_row.receipt_path, payment_row.online_receipt_path
+  );
+
+  delete from public.payments where id = payment_row.id;
+
+  return jsonb_build_object(
+    'receipt_path', payment_row.receipt_path,
+    'online_receipt_path', payment_row.online_receipt_path
+  );
+end;
+$$;
+
+revoke all on function public.admin_clear_payment_charge(uuid, text) from public, anon;
+grant execute on function public.admin_clear_payment_charge(uuid, text) to authenticated;
+
 create or replace function public.guard_renter_payment_update()
 returns trigger
 language plpgsql
@@ -709,6 +787,11 @@ alter table public.utility_bills enable row level security;
 alter table public.settings enable row level security;
 alter table public.rent_reminder_emails enable row level security;
 alter table public.rent_reminder_email_deliveries enable row level security;
+
+drop policy if exists "Admins read cleared payment charges" on public.cleared_payment_charges;
+create policy "Admins read cleared payment charges"
+  on public.cleared_payment_charges for select to authenticated
+  using ((select public.is_admin()));
 
 drop policy if exists "Profiles are visible to their owner and admins" on public.profiles;
 create policy "Profiles are visible to their owner and admins"
@@ -805,8 +888,14 @@ create policy "Renters read their own payments"
   );
 
 drop policy if exists "Admins manage payments" on public.payments;
-create policy "Admins manage payments"
-  on public.payments for all to authenticated
+drop policy if exists "Admins create payments" on public.payments;
+drop policy if exists "Admins update payments" on public.payments;
+create policy "Admins create payments"
+  on public.payments for insert to authenticated
+  with check ((select public.is_admin()));
+
+create policy "Admins update payments"
+  on public.payments for update to authenticated
   using ((select public.is_admin()))
   with check ((select public.is_admin()));
 

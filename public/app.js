@@ -18,6 +18,7 @@ let state = {
   utility_bills: [],
   lease_changes: [],
   lease_renewal_requests: [],
+  cleared_payment_charges: [],
   renterAdminNotes: {},
   terminationNotice: null,
   settings: {
@@ -60,11 +61,14 @@ async function fetchCloudData() {
       ? supabase.from("lease_changes").select("*").order("created_at", { ascending: false })
       : Promise.resolve({ data: [], error: null }),
     supabase.from("lease_renewal_requests").select("*").order("created_at", { ascending: false }),
+    profile.role === "admin"
+      ? supabase.from("cleared_payment_charges").select("*").order("cleared_at", { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of results) {
     if (result.error) throw result.error;
   }
-  const [renters, payments, utilities, settings, leaseChanges, renewalRequests] = results;
+  const [renters, payments, utilities, settings, leaseChanges, renewalRequests, clearedPaymentCharges] = results;
   state.role = profile.role;
   state.user.name = profile.full_name || state.user.email;
   state.renters = renters.data;
@@ -72,6 +76,7 @@ async function fetchCloudData() {
   state.utility_bills = utilities.data;
   state.lease_changes = leaseChanges.data;
   state.lease_renewal_requests = renewalRequests.data;
+  state.cleared_payment_charges = clearedPaymentCharges.data;
   state.renterAdminNotes = profile.role === "admin"
     ? (await adminRequest("/api/admin/renter-notes", "GET")).notes
     : {};
@@ -341,6 +346,7 @@ function paymentsPage() {
       <select class="filter" id="payment-location-filter" aria-label="Filter by location"><option value="all" ${paymentFilters.location === "all" ? "selected" : ""}>All locations</option>${locations.map((location) => `<option value="${escapeHtml(location)}" ${paymentFilters.location === location ? "selected" : ""}>${escapeHtml(location)}</option>`).join("")}</select>
       <select class="filter" id="payment-type-filter" aria-label="Filter by rental type"><option value="all" ${paymentFilters.rentalType === "all" ? "selected" : ""}>All rental types</option>${["Room", "House", "Apartment"].map((type) => `<option value="${type}" ${paymentFilters.rentalType === type ? "selected" : ""}>${type}</option>`).join("")}</select>
       <button class="button secondary" data-action="clear-payment-filters">Clear filters</button>
+      ${state.role === "admin" ? `<button class="button secondary" data-action="view-cleared-payment-charges">Cleared charges</button>` : ""}
     </div>
     <p class="muted-note payment-result-count" id="payment-result-count" aria-live="polite"></p>
     <div class="stats" id="payment-stats"></div>
@@ -362,7 +368,93 @@ function paymentStatsMarkup(payments) {
     <div class="stat"><div class="stat-head"><span>Receipt reviews</span><span class="stat-icon">▧</span></div><strong>${payments.filter((p) => p.status === "review").length}</strong><small>Awaiting admin approval</small></div>`;
 }
 function paymentRowsMarkup(payments) {
-  return payments.length ? payments.map((payment) => `<tr><td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")}</td><td>${escapeHtml(payment.period)}</td><td>${money(payment.base_amount)}</td><td>${money(payment.utility_amount)}</td><td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td><td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td><td>${statusBadge(paymentStatus(payment))}${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" style="display:block;margin-top:5px" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print receipt</button><small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "online" ? "Online" : payment.payment_method === "cash" ? "Cash" : "Method not recorded"}${payment.received_by ? ` · Received by ${escapeHtml(payment.received_by)}` : ""}</small>` : ""}</td><td>${payment.status !== "paid" ? `<button class="text-button" data-action="mark-paid" data-id="${escapeHtml(payment.id)}">${payment.status === "review" ? "Approve & mark paid" : "Mark paid"}</button>${renterById(payment.renter_id).phone ? `<button class="text-button" data-action="sms" data-id="${escapeHtml(payment.id)}">Send SMS</button>` : ""}` : "—"}</td></tr>`).join("") : `<tr><td colspan="8"><div class="empty">No payments match these filters.</div></td></tr>`;
+  return payments.length ? payments.map((payment) => `<tr><td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")}</td><td>${escapeHtml(payment.period)}</td><td>${money(payment.base_amount)}</td><td>${money(payment.utility_amount)}</td><td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td><td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td><td>${statusBadge(paymentStatus(payment))}${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" style="display:block;margin-top:5px" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print receipt</button><small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "online" ? "Online" : payment.payment_method === "cash" ? "Cash" : "Method not recorded"}${payment.received_by ? ` · Received by ${escapeHtml(payment.received_by)}` : ""}</small>` : ""}</td><td>${payment.status !== "paid" ? `<button class="text-button" data-action="mark-paid" data-id="${escapeHtml(payment.id)}">${payment.status === "review" ? "Approve & mark paid" : "Mark paid"}</button><button class="text-button" style="color:#a23b30" data-action="clear-payment-charge" data-id="${escapeHtml(payment.id)}">Clear charge</button>${renterById(payment.renter_id).phone ? `<button class="text-button" data-action="sms" data-id="${escapeHtml(payment.id)}">Send SMS</button>` : ""}` : "—"}</td></tr>`).join("") : `<tr><td colspan="8"><div class="empty">No payments match these filters.</div></td></tr>`;
+}
+function clearedPaymentChargesModal() {
+  if (state.role !== "admin") return toast("Only an administrator can view cleared charges.", true);
+  const charges = state.cleared_payment_charges;
+  const rows = charges.map((charge) => `<tr>
+    <td>${escapeHtml(renterById(charge.renter_id).full_name || "Renter")}</td>
+    <td>${escapeHtml(charge.period)}</td>
+    <td>${formatDate(charge.due_date)}</td>
+    <td>${money(charge.amount)}</td>
+    <td>${escapeHtml(charge.reason)}</td>
+    <td>${formatDate(charge.cleared_at)}</td>
+  </tr>`).join("");
+  modal("Cleared charges", `<div class="table-wrap"><table>
+    <thead><tr><th>RENTER</th><th>PERIOD</th><th>DUE DATE</th><th>AMOUNT</th><th>REASON</th><th>CLEARED ON</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="6"><div class="empty">No charges have been cleared.</div></td></tr>`}</tbody>
+  </table></div>`, `<button class="button secondary" data-action="close-modal">Close</button>`);
+}
+function clearPaymentChargeModal(id) {
+  const payment = state.payments.find((item) => item.id === id);
+  if (state.role !== "admin") return toast("Only an administrator can clear a charge.", true);
+  if (!payment || payment.status === "paid") return toast("Only unpaid charges can be cleared.", true);
+  modal("Clear charge", `<form id="clear-payment-charge-form" data-payment-id="${escapeHtml(id)}">
+    <div class="notice">This permanently removes the unpaid charge from payment history. The reason and charge details will remain in the cleared charges log.</div>
+    <div class="form-grid" style="margin-top:16px">
+      <div class="field full"><strong>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")} · ${escapeHtml(payment.period)} · ${money(payment.amount)}</strong></div>
+      <div class="field full"><label for="clear-payment-reason">Reason for clearing (required)</label><textarea id="clear-payment-reason" name="reason" minlength="3" maxlength="1000" rows="4" required></textarea></div>
+    </div>
+  </form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="confirm-clear-payment-charge">Clear charge</button>`);
+}
+async function clearPaymentCharge() {
+  const form = document.querySelector("#clear-payment-charge-form");
+  if (!form?.reportValidity()) return;
+  const payment = state.payments.find((item) => item.id === form.dataset.paymentId);
+  if (!payment || payment.status === "paid") return toast("Only unpaid charges can be cleared.", true);
+  const reasonValue = new FormData(form).get("reason");
+  if (typeof reasonValue !== "string") return toast("Enter a reason for clearing this charge.", true);
+  const reason = reasonValue.trim();
+  const button = document.querySelector('[data-action="confirm-clear-payment-charge"]');
+  if (button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Clearing...";
+  }
+  let clearedPayment;
+  try {
+    const { data, error } = await supabase.rpc("admin_clear_payment_charge", {
+      p_payment_id: payment.id,
+      p_reason: reason,
+    });
+    if (error) throw error;
+    clearedPayment = data;
+  } catch (error) {
+    toast(error.message || "Could not clear the charge.", true);
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = "Clear charge";
+    }
+    return;
+  }
+
+  state.payments = state.payments.filter((item) => item.id !== payment.id);
+  state.cleared_payment_charges.unshift({
+    ...payment,
+    reason,
+    cleared_by: state.user.id,
+    cleared_at: new Date().toISOString(),
+  });
+  document.querySelector(".modal-backdrop")?.remove();
+  render();
+
+  const cleanupErrors = [];
+  for (const [bucket, path] of [["receipts", clearedPayment?.receipt_path], ["payment-proofs", clearedPayment?.online_receipt_path]]) {
+    if (!path) continue;
+    try {
+      const { error: storageError } = await supabase.storage.from(bucket).remove([path]);
+      if (storageError) cleanupErrors.push(`${bucket}: ${storageError.message}`);
+    } catch (error) {
+      cleanupErrors.push(`${bucket}: ${error.message || "Storage request failed."}`);
+    }
+  }
+  if (cleanupErrors.length) {
+    console.error("Charge was cleared, but proof cleanup failed:", cleanupErrors.join("; "));
+    toast("Charge cleared, but attached proof files could not be deleted. Contact the administrator.", true);
+  } else {
+    toast("Charge cleared. The reason was saved in the cleared charges log.");
+  }
 }
 function updatePaymentsFromFilters() {
   paymentFilters.search = document.querySelector("#payment-search")?.value.trim() || "";
@@ -410,7 +502,7 @@ function renterPaymentHistoryModal(renterId) {
     .filter((payment) => payment.renter_id === renterId)
     .sort((a, b) => new Date(b.due_date) - new Date(a.due_date));
   const rows = payments.length
-    ? `<div class="table-wrap"><table><thead><tr><th>PERIOD</th><th>DUE DATE</th><th>CHARGE</th><th>LATE FEE</th><th>TOTAL</th><th>STATUS</th><th>RECEIPT</th></tr></thead><tbody>${payments.map((payment) => `<tr>
+    ? `<div class="table-wrap"><table><thead><tr><th>PERIOD</th><th>DUE DATE</th><th>CHARGE</th><th>LATE FEE</th><th>TOTAL</th><th>STATUS</th><th>RECEIPT</th><th>ACTION</th></tr></thead><tbody>${payments.map((payment) => `<tr>
       <td>${escapeHtml(payment.period)}</td>
       <td>${formatDate(payment.due_date)}</td>
       <td>${money(payment.amount)}</td>
@@ -418,6 +510,7 @@ function renterPaymentHistoryModal(renterId) {
       <td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td>
       <td>${statusBadge(paymentStatus(payment))}</td>
       <td>${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print generated receipt</button>` : !payment.receipt_path ? "Available after payment is confirmed" : ""}</td>
+      <td>${state.role === "admin" && payment.status !== "paid" ? `<button class="text-button" style="color:#a23b30" data-action="clear-payment-charge" data-id="${escapeHtml(payment.id)}">Clear charge</button>` : "—"}</td>
     </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">No charges or payments have been recorded for this renter yet.</div>`;
   modal(`Payment history · ${escapeHtml(renter.full_name)}`, `<p class="muted-note">Complete payment history for ${escapeHtml(renter.unit_name)} · ${escapeHtml(renter.location || "Location not set")}</p>${rows}`,
@@ -1426,6 +1519,9 @@ document.addEventListener("click", async (event) => {
   if (action === "save-rates") return saveRates();
   if (action === "mark-paid") return confirmPaymentModal(id);
   if (action === "confirm-payment") return markPaid();
+  if (action === "clear-payment-charge") return clearPaymentChargeModal(id);
+  if (action === "confirm-clear-payment-charge") return clearPaymentCharge();
+  if (action === "view-cleared-payment-charges") return clearedPaymentChargesModal();
   if (action === "receipt") return showReceipt(id);
   if (action === "online-proof") return showOnlineProof(id);
   if (action === "delete-payment-proof") return deletePaymentProof(id, target.dataset.kind);
