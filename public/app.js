@@ -19,6 +19,7 @@ let state = {
   lease_changes: [],
   lease_renewal_requests: [],
   cleared_payment_charges: [],
+  rent_payment_schedule_checks: [],
   renterAdminNotes: {},
   terminationNotice: null,
   settings: {
@@ -64,11 +65,14 @@ async function fetchCloudData() {
     profile.role === "admin"
       ? supabase.from("cleared_payment_charges").select("*").order("cleared_at", { ascending: false })
       : Promise.resolve({ data: [], error: null }),
+    profile.role === "admin"
+      ? supabase.from("rent_payment_schedule_checks").select("*").order("checked_at", { ascending: false }).limit(1000)
+      : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of results) {
     if (result.error) throw result.error;
   }
-  const [renters, payments, utilities, settings, leaseChanges, renewalRequests, clearedPaymentCharges] = results;
+  const [renters, payments, utilities, settings, leaseChanges, renewalRequests, clearedPaymentCharges, rentPaymentScheduleChecks] = results;
   state.role = profile.role;
   state.user.name = profile.full_name || state.user.email;
   state.renters = renters.data;
@@ -77,6 +81,7 @@ async function fetchCloudData() {
   state.lease_changes = leaseChanges.data;
   state.lease_renewal_requests = renewalRequests.data;
   state.cleared_payment_charges = clearedPaymentCharges.data;
+  state.rent_payment_schedule_checks = rentPaymentScheduleChecks.data;
   state.renterAdminNotes = profile.role === "admin"
     ? (await adminRequest("/api/admin/renter-notes", "GET")).notes
     : {};
@@ -338,6 +343,7 @@ function paymentsPage() {
   const payments = [...state.payments].sort((a, b) => new Date(b.due_date) - new Date(a.due_date));
   const locations = [...new Set(state.renters.map((renter) => renter.location).filter(Boolean))].sort();
   return `<div class="section-title"><div><p>Review receipts, track rent, and follow up on unpaid balances.</p></div></div>
+    ${rentPaymentScheduleAuditMarkup()}
     <div class="toolbar payment-toolbar">
       <input class="search" id="payment-search" type="search" value="${escapeHtml(paymentFilters.search)}" placeholder="⌕  Search renter, unit, or period..." aria-label="Search payments" />
       ${paymentDateRangeControls("payment")}
@@ -351,6 +357,41 @@ function paymentsPage() {
     <p class="muted-note payment-result-count" id="payment-result-count" aria-live="polite"></p>
     <div class="stats" id="payment-stats"></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>RENTER</th><th>PERIOD</th><th>BASE RENT</th><th>UTILITIES</th><th>LATE FEE</th><th>TOTAL DUE</th><th>STATUS / RECEIPT</th><th>ACTION</th></tr></thead><tbody id="payment-table-body"></tbody></table></div></div>`;
+}
+function rentPaymentScheduleAuditMarkup() {
+  if (state.role !== "admin") return "";
+  const checks = state.rent_payment_schedule_checks;
+  if (!checks.length) {
+    return `<section class="card" style="margin-bottom:16px"><div class="card-head"><h3>Monthly charge schedule check</h3></div><p class="muted-note">No checks have run yet. Applying the latest schema runs an initial check for this month and next month. Scheduled checks run on the 1st and 30th.</p></section>`;
+  }
+  const latestCheckDate = checks[0].checked_on;
+  const latestChecks = checks.filter((check) => check.checked_on === latestCheckDate);
+  const issues = latestChecks.filter((check) =>
+    check.monthly_charge_count === 0 ||
+    check.monthly_charge_count > 1 ||
+    check.expected_due_charge_count === 0
+  );
+  const issueRows = issues.map((check) => {
+    const renter = renterById(check.renter_id);
+    const issue = check.monthly_charge_count === 0
+      ? "Missing charge"
+      : check.monthly_charge_count > 1
+        ? "Duplicate rent charges"
+        : "Charge has unexpected due date";
+    return `<tr>
+      <td>${escapeHtml(renter.full_name || "Renter")} · ${escapeHtml(renter.unit_name || "Unit not set")}</td>
+      <td>${formatDate(check.target_month)}</td>
+      <td>${formatDate(check.expected_due_date)}</td>
+      <td>${check.monthly_charge_count}</td>
+      <td>${escapeHtml(issue)}</td>
+    </tr>`;
+  }).join("");
+  return `<section class="card" style="margin-bottom:16px">
+    <div class="card-head"><div><h3>Monthly charge schedule check</h3><p class="muted-note">Checks current and next month per apartment; it never changes charges.</p></div><small>Last check: ${formatDate(latestCheckDate)}</small></div>
+    ${issues.length
+      ? `<p class="notice">${issues.length} schedule issue${issues.length === 1 ? "" : "s"} found. Review the apartment and month before editing any charges.</p><div class="table-wrap"><table><thead><tr><th>RENTER / APARTMENT</th><th>MONTH</th><th>EXPECTED DUE DATE</th><th>RENT CHARGES FOUND</th><th>CHECK</th></tr></thead><tbody>${issueRows}</tbody></table></div>`
+      : `<p class="muted-note">No missing, duplicate, or incorrectly dated rent charges were found in the latest check.</p>`}
+  </section>`;
 }
 function paymentDateRangeControls(prefix) {
   const startId = `${prefix}-start-date`;

@@ -152,6 +152,22 @@ create table if not exists public.cleared_payment_charges (
   cleared_at timestamptz not null default now()
 );
 
+create table if not exists public.rent_payment_schedule_checks (
+  id uuid primary key default gen_random_uuid(),
+  checked_on date not null,
+  target_month date not null,
+  renter_id uuid not null references public.renters(id) on delete cascade,
+  expected_due_date date not null,
+  monthly_charge_count integer not null check (monthly_charge_count >= 0),
+  expected_due_charge_count integer not null check (expected_due_charge_count >= 0),
+  checked_at timestamptz not null default now(),
+  unique (checked_on, target_month, renter_id)
+);
+
+alter table public.rent_payment_schedule_checks enable row level security;
+revoke all on public.rent_payment_schedule_checks from public, anon, authenticated;
+grant select on public.rent_payment_schedule_checks to authenticated;
+
 alter table public.cleared_payment_charges enable row level security;
 revoke all on public.cleared_payment_charges from public, anon, authenticated;
 grant select on public.cleared_payment_charges to authenticated;
@@ -283,6 +299,62 @@ begin
 end;
 $$;
 
+create or replace function public.audit_rent_payment_schedule()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  schedule_date date := timezone('Asia/Manila', now())::date;
+begin
+  insert into public.rent_payment_schedule_checks (
+    checked_on, target_month, renter_id, expected_due_date,
+    monthly_charge_count, expected_due_charge_count, checked_at
+  )
+  select
+    schedule_date,
+    target_month.month_start,
+    renter.id,
+    expected.expected_due_date,
+    charge_counts.monthly_charge_count,
+    charge_counts.expected_due_charge_count,
+    now()
+  from public.renters renter
+  cross join lateral (
+    values
+      (date_trunc('month', schedule_date)::date),
+      ((date_trunc('month', schedule_date)::date + interval '1 month')::date)
+  ) as target_month(month_start)
+  cross join lateral (
+    select target_month.month_start + (
+      least(
+        renter.rent_due_day,
+        extract(day from (target_month.month_start + interval '1 month' - interval '1 day'))::integer
+      ) - 1
+    ) as expected_due_date
+  ) as expected
+  cross join lateral (
+    select
+      count(payment.id)::integer as monthly_charge_count,
+      (count(payment.id) filter (where payment.due_date = expected.expected_due_date))::integer as expected_due_charge_count
+    from public.payments payment
+    where payment.renter_id = renter.id
+      and payment.base_amount > 0
+      and payment.due_date >= target_month.month_start
+      and payment.due_date < target_month.month_start + interval '1 month'
+  ) as charge_counts
+  where renter.status = 'active'
+    and expected.expected_due_date between renter.contract_start and renter.contract_end
+  on conflict (checked_on, target_month, renter_id)
+  do update set
+    expected_due_date = excluded.expected_due_date,
+    monthly_charge_count = excluded.monthly_charge_count,
+    expected_due_charge_count = excluded.expected_due_charge_count,
+    checked_at = excluded.checked_at;
+end;
+$$;
+
 create or replace function public.sync_renter_rent_payment_schedule()
 returns trigger
 language plpgsql
@@ -306,12 +378,19 @@ $$;
 
 revoke all on function public.schedule_renter_rent_payments(uuid) from public, anon, authenticated;
 revoke all on function public.schedule_monthly_rent_payments() from public, anon, authenticated;
+revoke all on function public.audit_rent_payment_schedule() from public, anon, authenticated;
 revoke all on function public.sync_renter_rent_payment_schedule() from public, anon, authenticated;
 
 select cron.schedule(
   'schedule-monthly-rent-payments',
   '0 16 14 * *',
   'select public.schedule_monthly_rent_payments();'
+);
+
+select cron.schedule(
+  'audit-rent-payment-schedule',
+  '0 4 1,30 * *',
+  'select public.audit_rent_payment_schedule();'
 );
 
 drop trigger if exists schedule_renter_rent_payments on public.renters;
@@ -322,6 +401,7 @@ create trigger schedule_renter_rent_payments
 do $$
 begin
   perform public.schedule_monthly_rent_payments();
+  perform public.audit_rent_payment_schedule();
 end;
 $$;
 
@@ -791,6 +871,11 @@ alter table public.rent_reminder_email_deliveries enable row level security;
 drop policy if exists "Admins read cleared payment charges" on public.cleared_payment_charges;
 create policy "Admins read cleared payment charges"
   on public.cleared_payment_charges for select to authenticated
+  using ((select public.is_admin()));
+
+drop policy if exists "Admins read rent payment schedule checks" on public.rent_payment_schedule_checks;
+create policy "Admins read rent payment schedule checks"
+  on public.rent_payment_schedule_checks for select to authenticated
   using ((select public.is_admin()));
 
 drop policy if exists "Profiles are visible to their owner and admins" on public.profiles;
