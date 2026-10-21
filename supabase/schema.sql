@@ -19,7 +19,7 @@ create table if not exists public.renters (
   email text,
   phone text not null default '',
   unit_name text not null,
-  location text check (location in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag')),
+  location text check (location in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag', 'Cebu')),
   rental_type text not null check (rental_type in ('Room', 'House', 'Apartment')),
   contract_months integer not null check (contract_months in (6, 12)),
   contract_start date not null,
@@ -32,6 +32,12 @@ create table if not exists public.renters (
   id_image_path text,
   contract_image_path text,
   created_at timestamptz not null default now()
+);
+
+create table if not exists public.renter_admin_notes (
+  renter_id uuid primary key references public.renters(id) on delete cascade,
+  note text not null default '',
+  updated_at timestamptz not null default now()
 );
 
 alter table public.renters
@@ -51,7 +57,7 @@ alter table public.renters
   drop constraint if exists renters_rent_due_day_check;
 
 alter table public.renters
-  add constraint renters_location_check check (location is null or location in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag')),
+  add constraint renters_location_check check (location is null or location in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag', 'Cebu')),
   add constraint renters_rent_due_day_check check (rent_due_day between 1 and 31);
 
 do $$
@@ -251,7 +257,7 @@ begin
     raise exception 'A reason of at least 3 characters is required.';
   end if;
   if p_unit_name is null or length(trim(p_unit_name)) = 0
-    or p_location is null or p_location not in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag')
+    or p_location is null or p_location not in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag', 'Cebu')
     or p_rental_type is null or p_rental_type not in ('Room', 'House', 'Apartment')
     or p_contract_months is null or p_contract_months not in (6, 12)
     or p_contract_start is null or p_contract_end is null or p_contract_end < p_contract_start
@@ -539,6 +545,7 @@ create trigger guard_renter_payment_update
 
 alter table public.profiles enable row level security;
 alter table public.renters enable row level security;
+alter table public.renter_admin_notes enable row level security;
 alter table public.lease_changes enable row level security;
 alter table public.lease_renewal_requests enable row level security;
 alter table public.payments enable row level security;
@@ -571,6 +578,15 @@ create policy "Admins manage renters"
   on public.renters for all to authenticated
   using ((select public.is_admin()))
   with check ((select public.is_admin()));
+
+drop policy if exists "Admins manage renter notes" on public.renter_admin_notes;
+create policy "Admins manage renter notes"
+  on public.renter_admin_notes for all to authenticated
+  using ((select public.is_admin()))
+  with check ((select public.is_admin()));
+
+revoke all on public.renter_admin_notes from anon, authenticated;
+grant select, insert, update, delete on public.renter_admin_notes to authenticated, service_role;
 
 drop policy if exists "Admins manage lease change history" on public.lease_changes;
 create policy "Admins manage lease change history"

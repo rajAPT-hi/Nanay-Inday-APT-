@@ -254,7 +254,7 @@ app.post("/api/admin/renters", requireAdmin, async (req, res) => {
   const password = typeof body.password === "string" ? body.password : "";
   if (requiredText.some((key) => typeof body[key] !== "string" || !body[key].trim()) ||
       !["Room", "House", "Apartment"].includes(body.rentalType) ||
-      !["Vasquez", "Villa", "Cabalawan", "Kaskag"].includes(body.location) ||
+      !["Vasquez", "Villa", "Cabalawan", "Kaskag", "Cebu"].includes(body.location) ||
       ![6, 12].includes(Number(body.contractMonths)) ||
       !Number.isInteger(body.rentDueDay) || body.rentDueDay < 1 || body.rentDueDay > 31 ||
       typeof body.rentAmount !== "number" || !Number.isFinite(body.rentAmount) || body.rentAmount < 0 ||
@@ -312,6 +312,32 @@ app.post("/api/admin/renters", requireAdmin, async (req, res) => {
     return res.status(400).json({ error: renterError.message });
   }
   res.status(201).json({ renter });
+});
+
+app.get("/api/admin/renter-notes", requireAdmin, async (_req, res) => {
+  const { data, error } = await adminClient.from("renter_admin_notes").select("renter_id, note");
+  if (error) return res.status(500).json({ error: "Could not load administrator renter notes." });
+  res.json({ notes: Object.fromEntries(data.map(({ renter_id, note }) => [renter_id, note])) });
+});
+
+app.put("/api/admin/renters/:renterId/notes", requireAdmin, async (req, res) => {
+  const { note } = req.body || {};
+  if (typeof note !== "string" || note.length > 3000) {
+    return res.status(400).json({ error: "Renter notes must be text no longer than 3000 characters." });
+  }
+
+  const { data: renter, error: renterError } = await adminClient
+    .from("renters").select("id").eq("id", req.params.renterId).maybeSingle();
+  if (renterError) return res.status(500).json({ error: "Could not look up the renter record." });
+  if (!renter) return res.status(404).json({ error: "Renter record not found." });
+
+  const { error: saveError } = await adminClient.from("renter_admin_notes").upsert({
+    renter_id: renter.id,
+    note,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "renter_id" });
+  if (saveError) return res.status(500).json({ error: "Could not save administrator renter notes." });
+  res.json({ saved: true });
 });
 
 app.post("/api/admin/renters/:renterId/account", requireAdmin, async (req, res) => {

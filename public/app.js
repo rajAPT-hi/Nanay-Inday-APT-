@@ -18,6 +18,7 @@ let state = {
   utility_bills: [],
   lease_changes: [],
   lease_renewal_requests: [],
+  renterAdminNotes: {},
   terminationNotice: null,
   settings: {
     water_rate: 45,
@@ -71,6 +72,9 @@ async function fetchCloudData() {
   state.utility_bills = utilities.data;
   state.lease_changes = leaseChanges.data;
   state.lease_renewal_requests = renewalRequests.data;
+  state.renterAdminNotes = profile.role === "admin"
+    ? (await adminRequest("/api/admin/renter-notes", "GET")).notes
+    : {};
   state.settings = {
     ...state.settings,
     ...Object.fromEntries(settings.data.map((row) => [row.key, Number(row.value)])),
@@ -271,14 +275,14 @@ function renderRenterTable(renters) {
       <td>${dayLabel(renter.rent_due_day)} of each month</td>
       <td>${formatDate(renter.contract_end)}</td>
       <td>${statusBadge(contractStatus(renter))}</td>
-      <td>${renter.status !== "terminated" ? `<button class="text-button" data-action="edit-lease" data-id="${escapeHtml(renter.id)}">Edit lease</button><button class="text-button" style="color:var(--red)" data-action="terminate-lease" data-id="${escapeHtml(renter.id)}">Terminate</button>` : ""}<button class="text-button" data-action="renter-documents" data-id="${escapeHtml(renter.id)}">Documents</button><button class="text-button" data-action="lease-history" data-id="${escapeHtml(renter.id)}">Lease history</button>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${escapeHtml(renter.id)}">Password</button>` : renter.status !== "terminated" ? `<button class="text-button" data-action="create-renter-account" data-id="${escapeHtml(renter.id)}">Create login</button>` : ""}</td>
+      <td>${renter.status !== "terminated" ? `<button class="text-button" data-action="edit-lease" data-id="${escapeHtml(renter.id)}">Edit lease</button><button class="text-button" style="color:var(--red)" data-action="terminate-lease" data-id="${escapeHtml(renter.id)}">Terminate</button>` : ""}<button class="text-button" data-action="renter-notes" data-id="${escapeHtml(renter.id)}">${state.renterAdminNotes[renter.id] ? "Admin notes · Edit" : "Admin notes"}</button><button class="text-button" data-action="renter-documents" data-id="${escapeHtml(renter.id)}">Documents</button><button class="text-button" data-action="lease-history" data-id="${escapeHtml(renter.id)}">Lease history</button>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${escapeHtml(renter.id)}">Password</button>` : renter.status !== "terminated" ? `<button class="text-button" data-action="create-renter-account" data-id="${escapeHtml(renter.id)}">Create login</button>` : ""}</td>
     </tr>`).join("")}
     </tbody></table></div>`;
 }
 function rentersPage() {
   return `<div class="section-title"><div><p>Manage lease terms, record the reason for changes, terminate leases, and securely store renter documents.</p></div></div>
     ${renewalRequestsAdminPanel()}
-    <div class="toolbar"><input class="search" id="renter-search" placeholder="⌕  Search renters, units, or locations..." /><select class="filter" id="renter-filter"><option value="all">All rental types</option><option>Room</option><option>House</option><option>Apartment</option></select><select class="filter" id="renter-location-filter"><option value="all">All locations</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag"].map((location) => `<option>${location}</option>`).join("")}</select></div>
+    <div class="toolbar"><input class="search" id="renter-search" placeholder="⌕  Search renters, units, or locations..." /><select class="filter" id="renter-filter"><option value="all">All rental types</option><option>Room</option><option>House</option><option>Apartment</option></select><select class="filter" id="renter-location-filter"><option value="all">All locations</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag", "Cebu"].map((location) => `<option>${location}</option>`).join("")}</select></div>
     <div class="card" id="renter-table">${renderRenterTable(state.renters)}</div>`;
 }
 function renewalRequestsAdminPanel() {
@@ -472,7 +476,7 @@ function addRenterModal() {
   modal("Add a new renter", `<form id="renter-form"><div class="form-grid">
     <div class="field"><label>Full name</label><input name="full_name" required /></div><div class="field"><label>Renter email (optional)</label><input name="email" type="email" autocomplete="email" /></div>
     <div class="field"><label>Phone number</label><input name="phone" type="tel" placeholder="+63..." /></div><div class="field"><label>Unit name / number</label><input name="unit_name" placeholder="Room 01" required /></div>
-    <div class="field"><label>Rental location</label><select name="location" required><option value="">Select location</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag"].map((location) => `<option>${location}</option>`).join("")}</select></div>
+    <div class="field"><label>Rental location</label><select name="location" required><option value="">Select location</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag", "Cebu"].map((location) => `<option>${location}</option>`).join("")}</select></div>
     <div class="field"><label>Rental type</label><select name="rental_type"><option>Room</option><option>House</option><option>Apartment</option></select></div>
     <div class="field"><label>Contract term</label><select name="contract_months"><option value="6">6 months</option><option value="12">1 year (12 months)</option></select></div>
     <div class="field"><label>Contract start</label><input name="contract_start" type="date" value="${start}" required /></div>
@@ -490,6 +494,40 @@ function changeRenterPasswordModal(renterId) {
     <div class="field full"><label>Confirm new password</label><input name="confirm_password" type="password" autocomplete="new-password" minlength="12" required /></div>
     <div class="field full notice">The new password replaces the renter's current password immediately. Share it privately; never send it in a group message.</div>
   </div></form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-renter-password">Update password</button>`);
+}
+function renterAdminNotesModal(renterId) {
+  const renter = renterById(renterId);
+  if (!renter.id || state.role !== "admin") return;
+  modal(`Admin notes · ${escapeHtml(renter.full_name)}`, `<form id="renter-admin-notes-form" data-renter-id="${escapeHtml(renterId)}">
+    <p class="notice">These notes are private to administrators and are not visible to renters.</p>
+    <div class="field"><label>Notes (up to 3000 characters)</label><textarea name="note" maxlength="3000" rows="8" placeholder="Add private notes about this renter">${escapeHtml(state.renterAdminNotes[renterId] || "")}</textarea></div>
+    </form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-renter-notes">Save notes</button>`);
+}
+async function saveRenterAdminNotes() {
+  const form = document.querySelector("#renter-admin-notes-form");
+  if (!form) return;
+  const renterId = form.dataset.renterId;
+  const note = new FormData(form).get("note");
+  const button = document.querySelector('[data-action="save-renter-notes"]');
+  if (button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Saving...";
+  }
+  try {
+    await adminRequest(`/api/admin/renters/${encodeURIComponent(renterId)}/notes`, "PUT", { note });
+    state.renterAdminNotes[renterId] = note;
+    document.querySelector(".modal-backdrop")?.remove();
+    render();
+    toast("Administrator notes saved.");
+  } catch (error) {
+    toast(error.message || "Could not save administrator renter notes.", true);
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = "Save notes";
+    }
+  }
 }
 function createRenterAccountModal(renterId) {
   const renter = renterById(renterId);
@@ -539,7 +577,7 @@ function editLeaseModal(renterId) {
   if (renter.status === "terminated") return toast("Terminated leases cannot be edited.", true);
   modal(`Edit lease · ${escapeHtml(renter.full_name)}`, `<form id="lease-form" data-renter-id="${escapeHtml(renterId)}"><div class="form-grid">
     <div class="field"><label>Unit name / number</label><input name="unit_name" value="${escapeHtml(renter.unit_name)}" required /></div>
-    <div class="field"><label>Rental location</label><select name="location" required>${renter.location ? "" : '<option value="" disabled selected>Select location</option>'}${["Vasquez", "Villa", "Cabalawan", "Kaskag"].map((location) => `<option ${renter.location === location ? "selected" : ""}>${location}</option>`).join("")}</select></div>
+    <div class="field"><label>Rental location</label><select name="location" required>${renter.location ? "" : '<option value="" disabled selected>Select location</option>'}${["Vasquez", "Villa", "Cabalawan", "Kaskag", "Cebu"].map((location) => `<option ${renter.location === location ? "selected" : ""}>${location}</option>`).join("")}</select></div>
     <div class="field"><label>Rental type</label><select name="rental_type" required>${["Room", "House", "Apartment"].map((type) => `<option ${renter.rental_type === type ? "selected" : ""}>${type}</option>`).join("")}</select></div>
     <div class="field"><label>Contract term</label><select name="contract_months" required><option value="6" ${Number(renter.contract_months) === 6 ? "selected" : ""}>6 months</option><option value="12" ${Number(renter.contract_months) === 12 ? "selected" : ""}>1 year (12 months)</option></select></div>
     <div class="field"><label>Monthly rent (PHP)</label><input name="rent_amount" type="number" min="0" step=".01" value="${Number(renter.rent_amount)}" required /></div>
@@ -1323,6 +1361,8 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (action === "renter-documents") return renterDocumentsModal(id);
+  if (action === "renter-notes") return renterAdminNotesModal(id);
+  if (action === "save-renter-notes") return saveRenterAdminNotes();
   if (action === "view-renter-document") return viewRenterDocument(id, target.dataset.kind);
   if (action === "lease-history") return leaseHistoryModal(id);
   if (action === "renter-payment-history") return renterPaymentHistoryModal(id);
