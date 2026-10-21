@@ -56,7 +56,7 @@ async function fetchCloudData() {
     supabase.from("renters").select("*").order("created_at", { ascending: false }),
     supabase.from("payments").select(profile.role === "admin"
       ? "*"
-      : "id, renter_id, period, due_date, base_amount, utility_amount, amount, status, receipt_path, paid_at, payment_method, received_by, late_fee_amount, paid_amount, created_at")
+      : "id, renter_id, period, due_date, base_amount, utility_amount, amount, status, receipt_path, online_receipt_path, paid_at, payment_method, received_by, late_fee_amount, paid_amount, created_at")
       .order("due_date", { ascending: false }),
     supabase.from("utility_bills").select("*").order("created_at", { ascending: false }),
     supabase.from("settings").select("*"),
@@ -377,8 +377,8 @@ function rentersPage() {
     <div class="view-filter" role="group" aria-label="Filter renters by contract status">
       ${[["active", "Active"], ["terminated", "Terminated"], ["all", "All"]].map(([value, label]) => `<button class="button ${state.renterStatusFilter === value ? "primary" : "secondary"}" data-action="filter-renter-status" data-status="${value}" aria-pressed="${state.renterStatusFilter === value}">${label} (${state.renters.filter((renter) => value === "all" || renter.status === value).length})</button>`).join("")}
     </div>
-    <div id="renter-payment-summary">${renterPaymentSummaryMarkup(visibleRenters)}</div>
-    <div class="card" id="renter-table">${renderRenterTable(visibleRenters)}</div>`;
+    <div class="card" id="renter-table">${renderRenterTable(visibleRenters)}</div>
+    <div id="renter-payment-summary" style="margin-top:17px">${renterPaymentSummaryMarkup(visibleRenters)}</div>`;
 }
 function filterRenters(renters) {
   const query = document.querySelector("#renter-search")?.value.toLowerCase() || "";
@@ -477,7 +477,7 @@ function paymentStatsMarkup(payments) {
     <div class="stat"><div class="stat-head"><span>Receipt reviews</span><span class="stat-icon">▧</span></div><strong>${payments.filter((p) => p.status === "review").length}</strong><small>Awaiting admin approval</small></div>`;
 }
 function paymentRowsMarkup(payments) {
-  return payments.length ? payments.map((payment) => `<tr><td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")}</td><td>${escapeHtml(payment.period)}</td><td>${money(payment.base_amount)}</td><td>${money(payment.utility_amount)}</td><td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td><td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td><td>${statusBadge(paymentStatus(payment))}${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" style="display:block;margin-top:5px" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print receipt</button><small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "online" ? "Online" : payment.payment_method === "cash" ? "Cash" : "Method not recorded"}${payment.received_by ? ` · Received by ${escapeHtml(payment.received_by)}` : ""}</small>` : ""}</td><td>${payment.status !== "paid" ? `<button class="text-button" data-action="mark-paid" data-id="${escapeHtml(payment.id)}">${payment.status === "review" ? "Approve & mark paid" : "Mark paid"}</button><button class="text-button" style="color:#a23b30" data-action="clear-payment-charge" data-id="${escapeHtml(payment.id)}">Clear charge</button>${renterById(payment.renter_id).phone ? `<button class="text-button" data-action="sms" data-id="${escapeHtml(payment.id)}">Send SMS</button>` : ""}` : "—"}</td></tr>`).join("") : `<tr><td colspan="8"><div class="empty">No payments match these filters.</div></td></tr>`;
+  return payments.length ? payments.map((payment) => `<tr><td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")}</td><td>${escapeHtml(payment.period)}</td><td>${money(payment.base_amount)}</td><td>${money(payment.utility_amount)}</td><td>${money(payment.status === "paid" ? payment.late_fee_amount : lateFee(payment))}</td><td><strong>${money(payment.status === "paid" ? payment.paid_amount || payment.amount : Number(payment.amount) + lateFee(payment))}</strong></td><td>${statusBadge(paymentStatus(payment))}${payment.status === "review" ? `<small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "cash" ? "Cash reported" : "Online payment reported"}</small>` : ""}${payment.receipt_path ? proofFileActions(payment, "renter") : ""}${payment.online_receipt_path ? proofFileActions(payment, "online") : ""}${payment.status === "paid" ? `<button class="text-button" style="display:block;margin-top:5px" data-action="print-payment-receipt" data-id="${escapeHtml(payment.id)}">View / print receipt</button><small style="display:block;margin-top:5px;color:#718078">${payment.payment_method === "online" ? "Online" : payment.payment_method === "cash" ? "Cash" : "Method not recorded"}${payment.received_by ? ` · Received by ${escapeHtml(payment.received_by)}` : ""}</small>` : ""}</td><td>${payment.status !== "paid" ? `<button class="text-button" data-action="mark-paid" data-id="${escapeHtml(payment.id)}">${payment.status === "review" ? payment.payment_method === "cash" ? "Confirm cash payment" : "Approve & mark paid" : "Mark paid"}</button><button class="text-button" style="color:#a23b30" data-action="clear-payment-charge" data-id="${escapeHtml(payment.id)}">Clear charge</button>${renterById(payment.renter_id).phone ? `<button class="text-button" data-action="sms" data-id="${escapeHtml(payment.id)}">Send SMS</button>` : ""}` : "—"}</td></tr>`).join("") : `<tr><td colspan="8"><div class="empty">No payments match these filters.</div></td></tr>`;
 }
 function clearedPaymentChargesModal() {
   if (state.role !== "admin") return toast("Only an administrator can view cleared charges.", true);
@@ -625,6 +625,27 @@ function renterPaymentHistoryModal(renterId) {
   modal(`Payment history · ${escapeHtml(renter.full_name)}`, `<p class="muted-note">Complete payment history for ${escapeHtml(renter.unit_name)} · ${escapeHtml(renter.location || "Location not set")}</p>${rows}`,
     `<button class="button secondary" data-action="close-modal">Close</button>`);
 }
+function renterPaymentSubmissionModal(id) {
+  const payment = state.payments.find((item) => item.id === id);
+  if (!payment || payment.status !== "pending") return toast("This charge is no longer waiting for a payment method. Refresh your payment history.", true);
+  modal("Make a payment", `<form id="renter-payment-form" data-payment-id="${escapeHtml(id)}">
+    <div class="notice">Report how you paid this charge. Your payment will remain pending until the administrator confirms it.</div>
+    <div class="form-grid" style="margin-top:16px">
+      <div class="field full"><strong>${escapeHtml(payment.period)} · ${money(Number(payment.amount) + lateFee(payment))}</strong></div>
+      <div class="field full"><label for="renter-payment-method">Payment method</label><select id="renter-payment-method" name="payment_method" required><option value="">Choose a method</option><option value="cash">Cash</option><option value="online">Online</option></select></div>
+      <div class="field full" id="renter-payment-proof-field" style="display:none"><label for="renter-payment-proof">Online payment proof</label><input id="renter-payment-proof" name="payment_proof" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" /><small class="muted-note">Required for online payments. JPG, PNG, WebP, or PDF, maximum 10 MB.</small></div>
+    </div></form>`,
+  `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="submit-renter-payment">Submit payment</button>`);
+  const method = document.querySelector("#renter-payment-method");
+  const proofField = document.querySelector("#renter-payment-proof-field");
+  const proofInput = document.querySelector("#renter-payment-proof");
+  method.addEventListener("change", () => {
+    const online = method.value === "online";
+    proofField.style.display = online ? "" : "none";
+    proofInput.required = online;
+    if (!online) proofInput.value = "";
+  });
+}
 function utilitiesPage() {
   const bills = state.utility_bills;
   const totalBill = Number(state.settings.electricity_total_bill);
@@ -664,7 +685,7 @@ function renterPage() {
   if (!renter) return `<div class="card"><div class="empty"><span>⌂</span>Your rental details will appear here once the administrator links your renter account.</div></div>`;
   const payments = state.payments.filter((payment) => payment.renter_id === renter.id);
   const outstanding = payments.filter((p) => p.status !== "paid").reduce((t, p) => t + Number(p.amount) + lateFee(p), 0);
-  const proofUploadPayments = payments.filter((payment) => payment.status !== "paid" && !payment.receipt_path);
+  const paymentRequestPayments = payments.filter((payment) => payment.status === "pending");
   const renewalRequests = state.lease_renewal_requests.filter((request) => request.renter_id === renter.id);
   const latestRenewalRequest = renewalRequests[0];
   return `<section class="welcome renter-hero"><div><h2>Welcome, ${escapeHtml(renter.full_name.split(" ")[0])} 👋</h2><p>Your home at ${escapeHtml(renter.unit_name)} · ${escapeHtml(renter.rental_type)} · ${escapeHtml(renter.location || "Location not set")}</p></div><span class="status-pill">Contract ends ${formatDate(renter.contract_end)}</span></section>
@@ -678,12 +699,12 @@ function renterPage() {
       ${latestRenewalRequest?.status === "pending" ? `<p class="renewal-message">Your renewal request was sent on ${formatDate(latestRenewalRequest.created_at)}. Please wait for the administrator to respond.</p>` : latestRenewalRequest ? `<div class="renewal-message"><strong>Administrator's message:</strong><p>${escapeHtml(latestRenewalRequest.admin_message || (latestRenewalRequest.status === "approved" ? "Your renewal request was approved. Please contact the administrator to finalize the updated contract terms." : "Your renewal request was declined. Contact the administrator if you need help."))}</p></div>` : ""}
       ${latestRenewalRequest?.status !== "pending" ? `<button class="button primary" data-action="request-lease-renewal" data-id="${escapeHtml(renter.id)}">${latestRenewalRequest ? "Request renewal again" : "Request contract renewal"}</button>` : ""}
     </section>
-    <div class="card" style="margin-bottom:17px"><div class="card-head"><div><h3>Upload online payment proof</h3><p class="muted-note">For an online transfer, upload its receipt or screenshot so the administrator can review it.</p></div></div>
-      ${proofUploadPayments.length ? proofUploadPayments.map((payment) => `<div class="bill-line"><span>${escapeHtml(payment.period)} · Due ${formatDate(payment.due_date)} · ${money(Number(payment.amount) + lateFee(payment))}</span><button class="button secondary" data-action="upload-receipt" data-id="${escapeHtml(payment.id)}">Choose proof file</button></div>`).join("") : `<p class="muted-note">There are no unpaid charges waiting for proof right now.</p>`}
-      <small class="muted-note">Accepted files: JPG, PNG, WebP, or PDF. Maximum size: 10 MB.</small>
+    <div class="card" style="margin-bottom:17px"><div class="card-head"><div><h3>Make a payment</h3><p class="muted-note">Choose cash or online for an unpaid charge. Online payments require a receipt or screenshot; cash payments do not require proof. The administrator confirms each payment.</p></div></div>
+      ${paymentRequestPayments.length ? paymentRequestPayments.map((payment) => `<div class="bill-line"><span>${escapeHtml(payment.period)} · Due ${formatDate(payment.due_date)} · ${money(Number(payment.amount) + lateFee(payment))}</span><button class="button secondary" data-action="submit-payment-choice" data-id="${escapeHtml(payment.id)}">Make payment</button></div>`).join("") : `<p class="muted-note">There are no charges waiting for a payment method right now.</p>`}
+      <small class="muted-note">Online proof: JPG, PNG, WebP, or PDF, maximum 10 MB.</small>
     </div>
-    <div class="card"><div class="card-head"><h3>My payment history</h3><button class="button secondary" data-action="refresh-payment-history">Refresh</button></div><p class="muted-note">Charges appear here after the administrator creates them. If you paid online, upload your transfer receipt or screenshot (JPG, PNG, WebP, or PDF, up to 10 MB) for review. Your printable receipt appears after the administrator confirms payment.</p>
-      ${payments.length ? `<div class="table-wrap"><table><thead><tr><th>PERIOD</th><th>DUE DATE</th><th>RENT + UTILITIES</th><th>LATE FEE</th><th>STATUS</th><th>RECEIPT</th></tr></thead><tbody>${payments.map((p) => `<tr><td>${escapeHtml(p.period)}</td><td>${formatDate(p.due_date)}</td><td>${money(p.amount)}</td><td>${money(p.status === "paid" ? p.late_fee_amount : lateFee(p))}</td><td>${statusBadge(paymentStatus(p))}</td><td>${p.status === "paid" ? `<button class="text-button" data-action="print-payment-receipt" data-id="${escapeHtml(p.id)}">View / print receipt</button>` : p.receipt_path ? "Proof uploaded · awaiting review" : `<button class="text-button" data-action="upload-receipt" data-id="${escapeHtml(p.id)}">Upload digital payment proof</button>`}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No rental charges have been added yet.</div>`}
+    <div class="card"><div class="card-head"><h3>My payment history</h3><button class="button secondary" data-action="refresh-payment-history">Refresh</button></div><p class="muted-note">All rental charges and payment outcomes are listed here. Payments show as pending review until the administrator confirms them; a printable receipt is available afterward.</p>
+      ${payments.length ? `<div class="table-wrap"><table><thead><tr><th>PERIOD</th><th>DUE DATE</th><th>PAID ON</th><th>RENT + UTILITIES</th><th>LATE FEE</th><th>METHOD</th><th>STATUS</th><th>RECEIPT / ACTION</th></tr></thead><tbody>${payments.map((p) => `<tr><td>${escapeHtml(p.period)}</td><td>${formatDate(p.due_date)}</td><td>${p.paid_at ? formatDate(p.paid_at) : "—"}</td><td>${money(p.amount)}</td><td>${money(p.status === "paid" ? p.late_fee_amount : lateFee(p))}</td><td>${p.payment_method ? escapeHtml(p.payment_method === "online" ? "Online" : "Cash") : "—"}</td><td>${statusBadge(paymentStatus(p))}</td><td>${p.status === "paid" ? `<button class="text-button" data-action="print-payment-receipt" data-id="${escapeHtml(p.id)}">View / print receipt</button>` : p.status === "review" ? `${p.payment_method === "cash" ? "Cash reported · awaiting confirmation" : "Online proof submitted · awaiting review"}${p.receipt_path ? `<button class="text-button" style="display:block" data-action="receipt" data-id="${escapeHtml(p.id)}">View submitted proof</button>` : ""}` : `<button class="text-button" data-action="submit-payment-choice" data-id="${escapeHtml(p.id)}">Make payment</button>`}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No rental charges have been added yet.</div>`}
     </div>`;
 }
 
@@ -1309,6 +1330,66 @@ async function refreshPaymentHistory() {
     }
   }
 }
+async function submitRenterPayment() {
+  const form = document.querySelector("#renter-payment-form");
+  if (!form?.reportValidity()) return;
+  const payment = state.payments.find((item) => item.id === form.dataset.paymentId);
+  const values = Object.fromEntries(new FormData(form));
+  const file = form.elements.payment_proof.files?.[0];
+  const method = values.payment_method;
+  if (!payment || payment.status !== "pending") return toast("This charge is no longer waiting for a payment method. Refresh your payment history.", true);
+  if (!["cash", "online"].includes(method)) return toast("Choose cash or online payment.", true);
+  if (method === "online" && !file) return toast("Upload proof for an online payment.", true);
+  if (file && !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) {
+    return toast("Choose a JPG, PNG, WebP, or PDF payment proof.", true);
+  }
+  if (file && file.size > 10 * 1024 * 1024) return toast("The payment proof must be 10 MB or smaller.", true);
+
+  const button = document.querySelector('[data-action="submit-renter-payment"]');
+  if (button?.disabled) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Submitting...";
+  }
+  let path = null;
+  let uploaded = false;
+  try {
+    if (method === "online") {
+      path = `${state.user.id}/${payment.id}/${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`;
+      const { error: uploadError } = await supabase.storage.from("receipts")
+        .upload(path, file, { upsert: false, contentType: file.type });
+      if (uploadError) throw uploadError;
+      uploaded = true;
+    }
+    const { data: updated, error } = await supabase.from("payments")
+      .update({ payment_method: method, receipt_path: path, status: "review" })
+      .eq("id", payment.id).eq("status", "pending").is("receipt_path", null).select("id").maybeSingle();
+    if (error) throw error;
+    if (!updated) throw new Error("This charge changed while your payment was being submitted. Refresh your payment history and try again if it is still pending.");
+    payment.payment_method = method;
+    payment.receipt_path = path;
+    payment.status = "review";
+    document.querySelector(".modal-backdrop")?.remove();
+    render();
+    toast(method === "cash" ? "Cash payment reported. It is waiting for administrator confirmation." : "Online payment proof submitted for review.");
+  } catch (error) {
+    let cleanupMessage = "";
+    if (uploaded) {
+      const { error: cleanupError } = await supabase.storage.from("receipts").remove([path]);
+      if (cleanupError) {
+        console.error("Could not remove renter proof after a failed payment submission:", cleanupError.message);
+        cleanupMessage = " The uploaded file may remain in storage; contact the administrator if it appears in your history.";
+      }
+    }
+    toast(`${error.message || "Could not submit payment."}${cleanupMessage}`, true);
+  } finally {
+    const submitButton = document.querySelector('[data-action="submit-renter-payment"]');
+    if (submitButton?.isConnected) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Submit payment";
+    }
+  }
+}
 async function saveUtility() {
   const form = document.querySelector("#utility-form");
   if (!form.reportValidity()) return;
@@ -1380,7 +1461,7 @@ function confirmPaymentModal(id) {
   modal("Confirm payment", `<form id="confirm-payment-form" data-payment-id="${escapeHtml(id)}">
     <div class="notice">Confirming this payment creates a receipt for the renter. The late fee shown here will be included in the amount received.</div>
     <div class="form-grid" style="margin-top:16px">
-      <div class="field"><label>Payment method</label><select id="confirm-payment-method" name="payment_method" required><option value="cash">Cash</option><option value="online">Online</option></select></div>
+      <div class="field"><label>Payment method</label><select id="confirm-payment-method" name="payment_method" required><option value="cash" ${payment.payment_method === "cash" || !payment.payment_method ? "selected" : ""}>Cash</option><option value="online" ${payment.payment_method === "online" ? "selected" : ""}>Online</option></select></div>
       <div class="field"><label>Received by</label><input name="received_by" maxlength="120" value="${escapeHtml(state.user.name || state.user.email || "")}" required /></div>
       <div class="field full" id="online-proof-field" style="display:none"><label>Online payment receipt image / PDF</label><input id="online-proof-file" name="online_receipt" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" /><small class="muted-note">Required for online payments. Images or PDF, maximum 10 MB.</small></div>
       <div class="field full"><strong>Rental charge: ${money(payment.amount)}</strong><small class="muted-note">Late fee collected: ${money(lateFee(payment))} · Total received: ${money(Number(payment.amount) + lateFee(payment))}</small></div>
@@ -1389,12 +1470,18 @@ function confirmPaymentModal(id) {
   const method = document.querySelector("#confirm-payment-method");
   const proofField = document.querySelector("#online-proof-field");
   const proofInput = document.querySelector("#online-proof-file");
-  method.addEventListener("change", () => {
+  const updateProofRequirement = () => {
     const online = method.value === "online";
     proofField.style.display = online ? "" : "none";
-    proofInput.required = online;
+    proofInput.required = online && !payment.receipt_path;
+    const instructions = proofField.querySelector("small");
+    instructions.textContent = payment.receipt_path
+      ? "The renter has already submitted proof. You may upload a separate copy, if needed."
+      : "Required for online payments. Images or PDF, maximum 10 MB.";
     if (!online) proofInput.value = "";
-  });
+  };
+  method.addEventListener("change", updateProofRequirement);
+  updateProofRequirement();
 }
 async function markPaid() {
   const form = document.querySelector("#confirm-payment-form");
@@ -1405,7 +1492,7 @@ async function markPaid() {
   if (!["cash", "online"].includes(values.payment_method) || !values.received_by.trim()) {
     return toast("Select a payment method and enter who received the payment.", true);
   }
-  if (values.payment_method === "online" && !file) return toast("Upload the online payment receipt before confirming.", true);
+  if (values.payment_method === "online" && !file && !payment?.receipt_path) return toast("Upload the online payment receipt before confirming.", true);
   if (file && !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) {
     return toast("Choose a JPG, PNG, WebP, or PDF payment receipt.", true);
   }
@@ -1414,7 +1501,7 @@ async function markPaid() {
   let proofPath = null;
   try {
     if (!payment || payment.status === "paid") throw new Error("This payment is already confirmed or no longer available.");
-    if (values.payment_method === "online") {
+    if (values.payment_method === "online" && file) {
       const safeName = file.name.replace(/[^\w.-]/g, "_");
       proofPath = `${payment.id}/${Date.now()}-${safeName}`;
       const { error: uploadError } = await supabase.storage.from("payment-proofs")
@@ -1452,43 +1539,6 @@ async function markPaid() {
       if (cleanupError) console.error("Could not remove online proof after failed payment confirmation:", cleanupError.message);
     }
     toast(error.message || "Could not confirm payment.", true);
-  }
-}
-async function uploadReceipt(id, file) {
-  if (!file) return;
-  if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) {
-    return toast("Choose a JPG, PNG, WebP, or PDF payment proof.", true);
-  }
-  if (file.size > 10 * 1024 * 1024) return toast("The payment proof must be 10 MB or smaller.", true);
-  let path = null;
-  let uploaded = false;
-  try {
-    const payment = state.payments.find((item) => item.id === id);
-    if (!payment || payment.status === "paid" || payment.receipt_path) {
-      throw new Error("This payment can no longer accept a proof upload. Refresh your payment history.");
-    }
-    path = `${state.user.id}/${id}/${Date.now()}-${file.name.replace(/[^\w.-]/g, "_")}`;
-    const { error: uploadError } = await supabase.storage.from("receipts").upload(path, file, { upsert: false, contentType: file.type });
-    if (uploadError) throw uploadError;
-    uploaded = true;
-    const { data: updated, error } = await supabase.from("payments").update({ receipt_path: path, status: "review" })
-      .eq("id", id).eq("status", payment.status).is("receipt_path", null).select("id").maybeSingle();
-    if (error) throw error;
-    if (!updated) throw new Error("This payment changed while the proof was uploading. Refresh your payment history and try again if it is still unpaid.");
-    payment.receipt_path = path;
-    payment.status = "review";
-    render();
-    toast("Receipt uploaded and sent for review.");
-  } catch (error) {
-    let cleanupMessage = "";
-    if (uploaded) {
-      const { error: cleanupError } = await supabase.storage.from("receipts").remove([path]);
-      if (cleanupError) {
-        console.error("Could not remove renter proof after a failed upload:", cleanupError.message);
-        cleanupMessage = " The uploaded file may remain in storage; contact the administrator if it appears in your history.";
-      }
-    }
-    toast(`${error.message || "Could not upload receipt."}${cleanupMessage}`, true);
   }
 }
 async function deletePaymentProof(id, kind) {
@@ -1536,6 +1586,7 @@ async function deletePaymentProof(id, kind) {
 }
 async function showReceipt(id) {
   const payment = state.payments.find((item) => item.id === id);
+  if (!payment?.receipt_path) return toast("No renter-submitted proof is available.", true);
   const { data, error } = await supabase.storage.from("receipts").createSignedUrl(payment.receipt_path, 60);
   if (error) return toast(error.message, true);
   window.open(data.signedUrl, "_blank", "noopener,noreferrer");
@@ -1705,12 +1756,8 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (action === "sms") return sendSms(id);
-  if (action === "upload-receipt") {
-    const input = document.createElement("input");
-    input.type = "file"; input.accept = "image/jpeg,image/png,image/webp,application/pdf";
-    input.onchange = () => uploadReceipt(id, input.files?.[0]);
-    input.click();
-  }
+  if (action === "submit-payment-choice") return renterPaymentSubmissionModal(id);
+  if (action === "submit-renter-payment") return submitRenterPayment();
 });
 document.addEventListener("change", (event) => {
   const input = event.target.closest("[data-renter-document]");

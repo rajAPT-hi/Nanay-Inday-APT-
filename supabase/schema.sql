@@ -826,7 +826,7 @@ begin
     if not exists (
       select 1 from public.renters r
       where r.id = old.renter_id and r.user_id = auth.uid()
-    ) or old.status = 'paid'
+    ) or old.status <> 'pending'
       or new.renter_id is distinct from old.renter_id
       or new.period is distinct from old.period
       or new.due_date is distinct from old.due_date
@@ -840,11 +840,16 @@ begin
       or new.late_fee_amount is distinct from old.late_fee_amount
       or new.paid_amount is distinct from old.paid_amount
       or new.status is distinct from 'review'
-      or new.receipt_path is null then
-      raise exception 'Renter accounts may only submit a receipt for an unpaid payment.';
+      or new.payment_method is null
+      or new.payment_method not in ('cash', 'online')
+      or (new.payment_method = 'online' and new.receipt_path is null)
+      or (new.payment_method = 'cash' and new.receipt_path is not null) then
+      raise exception 'Renter accounts may only report cash or online payment for a pending charge; online payments require proof.';
     end if;
-    if split_part(new.receipt_path, '/', 1) <> auth.uid()::text
-      or split_part(new.receipt_path, '/', 2) <> old.id::text then
+    if new.receipt_path is not null and (
+      split_part(new.receipt_path, '/', 1) <> auth.uid()::text
+      or split_part(new.receipt_path, '/', 2) <> old.id::text
+    ) then
       raise exception 'Receipt path does not match this renter and payment.';
     end if;
   end if;
@@ -985,10 +990,11 @@ create policy "Admins update payments"
   with check ((select public.is_admin()));
 
 drop policy if exists "Renters submit payment receipts" on public.payments;
-create policy "Renters submit payment receipts"
+drop policy if exists "Renters report payment method" on public.payments;
+create policy "Renters report payment method"
   on public.payments for update to authenticated
   using (
-    status <> 'paid' and exists (
+    status = 'pending' and exists (
       select 1 from public.renters r
       join public.profiles pr on pr.id = r.user_id
       where r.id = payments.renter_id
