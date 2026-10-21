@@ -217,9 +217,43 @@ function overviewPage() {
         ${expiringRenters.length ? `<div class="activity">${expiringRenters.map((renter) => `<div class="activity-item"><div class="activity-icon">▣</div><div><strong>${escapeHtml(renter.full_name)}</strong><p>${escapeHtml(renter.unit_name)} · ends ${formatDate(renter.contract_end)}</p><time>${daysLeft(renter.contract_end)} days remaining</time></div></div>`).join("")}</div>` : `<div class="empty"><span>✓</span>No contracts expiring soon</div>`}
       </div>
     </section>
+    <section class="card upcoming-payments-card" style="margin-top:17px"><div class="card-head"><div><h3>Upcoming payments</h3><p class="muted-note">Unpaid charges ordered by due date.</p></div><button class="text-button" data-tab="payments">View payments →</button></div>
+      <div class="upcoming-payment-filters">${paymentDateRangeControls("overview-upcoming")}<button class="button secondary" data-action="clear-upcoming-payment-dates">Clear dates</button></div>
+      <p class="muted-note payment-result-count" id="upcoming-payment-result-count" aria-live="polite"></p>
+      <div id="upcoming-payment-list"></div>
+    </section>
     <section class="card" style="margin-top:17px"><div class="card-head"><h3>Recent payment activity</h3><button class="text-button" data-tab="payments">View payments →</button></div>
       ${recentPayments.length ? `<div class="activity">${recentPayments.map((payment) => `<div class="activity-item"><div class="activity-icon">${payment.status === "paid" ? "✓" : "₱"}</div><div style="flex:1"><strong>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")} · ${money(payment.amount)}</strong><p>${escapeHtml(payment.period)} · ${payment.status === "paid" ? `Paid ${formatDate(payment.paid_at)}` : `Due ${formatDate(payment.due_date)}`}</p></div>${statusBadge(paymentStatus(payment))}</div>`).join("")}</div>` : `<div class="empty">No payments recorded yet.</div>`}
     </section>`;
+}
+function upcomingPaymentsMarkup() {
+  const invalidRange = paymentFilters.startDate && paymentFilters.endDate && paymentFilters.startDate > paymentFilters.endDate;
+  const upcoming = state.payments
+    .filter((payment) => payment.status !== "paid" &&
+      (!paymentFilters.startDate || payment.due_date >= paymentFilters.startDate) &&
+      (!paymentFilters.endDate || payment.due_date <= paymentFilters.endDate))
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
+  const list = document.querySelector("#upcoming-payment-list");
+  const resultCount = document.querySelector("#upcoming-payment-result-count");
+  if (resultCount) {
+    resultCount.textContent = invalidRange
+      ? "The start date must be on or before the end date."
+      : `Showing ${Math.min(upcoming.length, 6)} of ${upcoming.length} unpaid payments`;
+  }
+  if (list) {
+    list.innerHTML = invalidRange
+      ? `<div class="empty">Choose a valid date range.</div>`
+      : upcoming.length
+        ? `<div class="activity">${upcoming.slice(0, 6).map((payment) => `<div class="activity-item"><div class="activity-icon">₱</div><div style="flex:1"><strong>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")} · ${money(Number(payment.amount) + lateFee(payment))}</strong><p>${escapeHtml(payment.period)} · Due ${formatDate(payment.due_date)}</p></div>${statusBadge(paymentStatus(payment))}</div>`).join("")}</div>`
+        : `<div class="empty">No unpaid payments in this date range.</div>`;
+  }
+}
+function updateUpcomingPayments() {
+  const startDateInput = document.querySelector("#overview-upcoming-start-date");
+  const endDateInput = document.querySelector("#overview-upcoming-end-date");
+  if (startDateInput) paymentFilters.startDate = startDateInput.value;
+  if (endDateInput) paymentFilters.endDate = endDateInput.value;
+  upcomingPaymentsMarkup();
 }
 function daysLeft(date) {
   return Math.max(0, Math.ceil((new Date(`${date}T23:59:59`) - Date.now()) / 86400000));
@@ -301,11 +335,7 @@ function paymentsPage() {
   return `<div class="section-title"><div><p>Review receipts, track rent, and follow up on unpaid balances.</p></div></div>
     <div class="toolbar payment-toolbar">
       <input class="search" id="payment-search" type="search" value="${escapeHtml(paymentFilters.search)}" placeholder="⌕  Search renter, unit, or period..." aria-label="Search payments" />
-      <div class="date-range-filter" role="group" aria-label="Filter payments by due date range">
-        <label for="payment-start-date">Due from</label><input class="filter" id="payment-start-date" type="date" value="${escapeHtml(paymentFilters.startDate)}" aria-label="Payment due date from" />
-        <span aria-hidden="true">to</span>
-        <label for="payment-end-date">Due through</label><input class="filter" id="payment-end-date" type="date" value="${escapeHtml(paymentFilters.endDate)}" aria-label="Payment due date through" />
-      </div>
+      ${paymentDateRangeControls("payment")}
       <select class="filter" id="payment-status-filter" aria-label="Filter by payment status"><option value="all" ${paymentFilters.status === "all" ? "selected" : ""}>All statuses</option><option value="pending" ${paymentFilters.status === "pending" ? "selected" : ""}>Pending</option><option value="review" ${paymentFilters.status === "review" ? "selected" : ""}>Awaiting review</option><option value="paid" ${paymentFilters.status === "paid" ? "selected" : ""}>Paid</option></select>
       <select class="filter" id="payment-method-filter" aria-label="Filter by payment method"><option value="all" ${paymentFilters.method === "all" ? "selected" : ""}>All methods</option><option value="cash" ${paymentFilters.method === "cash" ? "selected" : ""}>Cash</option><option value="online" ${paymentFilters.method === "online" ? "selected" : ""}>Online</option><option value="unknown" ${paymentFilters.method === "unknown" ? "selected" : ""}>Not recorded</option></select>
       <select class="filter" id="payment-location-filter" aria-label="Filter by location"><option value="all" ${paymentFilters.location === "all" ? "selected" : ""}>All locations</option>${locations.map((location) => `<option value="${escapeHtml(location)}" ${paymentFilters.location === location ? "selected" : ""}>${escapeHtml(location)}</option>`).join("")}</select>
@@ -315,6 +345,15 @@ function paymentsPage() {
     <p class="muted-note payment-result-count" id="payment-result-count" aria-live="polite"></p>
     <div class="stats" id="payment-stats"></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>RENTER</th><th>PERIOD</th><th>BASE RENT</th><th>UTILITIES</th><th>LATE FEE</th><th>TOTAL DUE</th><th>STATUS / RECEIPT</th><th>ACTION</th></tr></thead><tbody id="payment-table-body"></tbody></table></div></div>`;
+}
+function paymentDateRangeControls(prefix) {
+  const startId = `${prefix}-start-date`;
+  const endId = `${prefix}-end-date`;
+  return `<div class="date-range-filter" role="group" aria-label="Filter payments by due date range">
+    <label for="${startId}">Due from</label><input class="filter" id="${startId}" type="date" value="${escapeHtml(paymentFilters.startDate)}" aria-label="Payment due date from" />
+    <span aria-hidden="true">to</span>
+    <label for="${endId}">Due through</label><input class="filter" id="${endId}" type="date" value="${escapeHtml(paymentFilters.endDate)}" aria-label="Payment due date through" />
+  </div>`;
 }
 function paymentStatsMarkup(payments) {
   return `<div class="stat"><div class="stat-head"><span>Collected</span><span class="stat-icon">✓</span></div><strong>${money(payments.filter((p) => p.status === "paid").reduce((t, p) => t + (Number(p.paid_amount) || Number(p.amount)), 0))}</strong><small>Payments marked paid</small></div>
@@ -327,8 +366,10 @@ function paymentRowsMarkup(payments) {
 }
 function updatePaymentsFromFilters() {
   paymentFilters.search = document.querySelector("#payment-search")?.value.trim() || "";
-  paymentFilters.startDate = document.querySelector("#payment-start-date")?.value || "";
-  paymentFilters.endDate = document.querySelector("#payment-end-date")?.value || "";
+  const startDateInput = document.querySelector("#payment-start-date");
+  const endDateInput = document.querySelector("#payment-end-date");
+  if (startDateInput) paymentFilters.startDate = startDateInput.value;
+  if (endDateInput) paymentFilters.endDate = endDateInput.value;
   paymentFilters.status = document.querySelector("#payment-status-filter")?.value || "all";
   paymentFilters.method = document.querySelector("#payment-method-filter")?.value || "all";
   paymentFilters.location = document.querySelector("#payment-location-filter")?.value || "all";
@@ -466,6 +507,7 @@ function render() {
   app.innerHTML = appShell(content);
   if (state.tab === "utilities") updateElectricityRatePreview();
   if (state.tab === "payments") updatePaymentsFromFilters();
+  if (state.tab === "overview" && state.role === "admin") updateUpcomingPayments();
 }
 
 function modal(title, body, actions) {
@@ -1391,11 +1433,22 @@ document.addEventListener("click", async (event) => {
   if (action === "refresh-payment-history") return refreshPaymentHistory();
   if (action === "clear-payment-filters") {
     Object.assign(paymentFilters, { search: "", startDate: "", endDate: "", status: "all", method: "all", location: "all", rentalType: "all" });
-    for (const selector of ["#payment-search", "#payment-start-date", "#payment-end-date", "#payment-status-filter", "#payment-method-filter", "#payment-location-filter", "#payment-type-filter"]) {
+    for (const selector of ["#payment-search", "#payment-start-date", "#payment-end-date", "#overview-upcoming-start-date", "#overview-upcoming-end-date", "#payment-status-filter", "#payment-method-filter", "#payment-location-filter", "#payment-type-filter"]) {
       const control = document.querySelector(selector);
-      if (control) control.value = ["#payment-search", "#payment-start-date", "#payment-end-date"].includes(selector) ? "" : "all";
+      if (control) control.value = ["#payment-search", "#payment-start-date", "#payment-end-date", "#overview-upcoming-start-date", "#overview-upcoming-end-date"].includes(selector) ? "" : "all";
     }
     return updatePaymentsFromFilters();
+  }
+  if (action === "clear-upcoming-payment-dates") {
+    paymentFilters.startDate = "";
+    paymentFilters.endDate = "";
+    for (const selector of ["#payment-start-date", "#payment-end-date", "#overview-upcoming-start-date", "#overview-upcoming-end-date"]) {
+      const control = document.querySelector(selector);
+      if (control) control.value = "";
+    }
+    if (state.tab === "payments") updatePaymentsFromFilters();
+    if (state.tab === "overview") updateUpcomingPayments();
+    return;
   }
   if (action === "sms") return sendSms(id);
   if (action === "upload-receipt") {
@@ -1481,6 +1534,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", (event) => {
   if (event.target.matches("#renter-filter, #renter-location-filter")) updateRenterTableFromFilters();
   if (event.target.matches("#payment-start-date, #payment-end-date, #payment-status-filter, #payment-method-filter, #payment-location-filter, #payment-type-filter")) updatePaymentsFromFilters();
+  if (event.target.matches("#overview-upcoming-start-date, #overview-upcoming-end-date")) updateUpcomingPayments();
 });
 function updateRenterTableFromFilters() {
   const query = document.querySelector("#renter-search")?.value.toLowerCase() || "";

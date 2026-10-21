@@ -92,6 +92,8 @@ td { border-top: 1px solid #f0f2ef; padding: 12px 11px; font-size: 11px; white-s
 .date-range-filter label { white-space: nowrap; }
 .date-range-filter input[type="date"] { min-width: 140px; border: 0; background: transparent; padding: 7px 2px; color: var(--ink); font: inherit; }
 .date-range-filter input[type="date"]:focus { outline: 2px solid #8ab39a; outline-offset: 1px; border-radius: 4px; }
+.upcoming-payment-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.upcoming-payment-filters .date-range-filter { flex: 1 1 auto; }
 .payment-result-count { margin: 0 0 12px; }
 .search { border: 1px solid var(--line); border-radius: 9px; background: #fff; padding: 10px 12px; min-width: 190px; font-size: 12px; outline: none; }
 .search:focus, .field input:focus, .field select:focus { border-color: #8ab39a; box-shadow: 0 0 0 3px rgb(40 107 80 / 8%); }
