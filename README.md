@@ -79,25 +79,24 @@ Administrators can upload or replace renter ID and signed physical contract imag
 
 1. Install Node.js 20 or later and Git on the PC if they are not already installed. Create a **private GitHub repository** and upload this project. The included `.gitignore` prevents `.env` and `node_modules` from being uploaded.
 2. In Render, choose **New → Blueprint**, connect that GitHub repository, and deploy the included `render.yaml`. Alternatively create a **Web Service**, choose Node, set build command to `npm install`, and start command to `npm start`.
-3. In the Render service **Environment** settings, add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`. Get each from the Supabase project. Add `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM` to enable upcoming-rent notifications. Add SMS gateway variables only after the SIM gateway has been securely configured. Never add real keys to the repository.
+3. In the Render service **Environment** settings, add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`. Get each from the Supabase project. Add `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM` to enable upcoming-rent notifications. Add `SEMAPHORE_API_KEY` to enable manual SMS reminders. Keep all credentials in Render, never in the repository.
 4. Wait for the Render deployment to succeed, then open `https://YOUR-SERVICE.onrender.com/api/health`. It should return `{"status":"ok"}`. Open the site and sign in with the admin account.
 5. Copy the actual `https://YOUR-SERVICE.onrender.com` URL into Supabase **Authentication → URL Configuration** as the Site URL and an allowed redirect URL, save, and test adding a renter and sending a password reset.
 6. To update the app after changes, push the updated project to the connected GitHub branch; Render redeploys it.
 
 The browser is given only the Supabase anon/publishable key. The service-role key is used only by the Render server to verify administrator actions and manage renter authentication accounts.
 
-## SIM SMS reminders
+## Semaphore SMS reminders
 
-The app sends a fixed-format payment reminder to the SIM gateway endpoint configured as `SMS_GATEWAY_URL`, with `SMS_GATEWAY_TOKEN` sent as a bearer token. The gateway must accept an HTTPS JSON `POST` body of `{ "to": "+63...", "message": "..." }` and return a 2xx response only after the SMS has been accepted. Configure a SIM-equipped GSM modem/gateway separately. Render cannot access a SIM inserted in the administrator's PC directly.
+SMS reminders are sent only when an administrator clicks **Send SMS** for an outstanding charge in the Payments page. The server verifies the signed Supabase session and administrator role before forwarding the message to Semaphore; it never exposes the API key to the browser. The app posts the API key, recipient number, and reminder text as form data to Semaphore's `https://api.semaphore.co/api/v4/messages` endpoint. Semaphore's registered default sender name is used.
 
-To connect a SIM gateway:
+To enable SMS:
 
-1. Set up gateway software/hardware on the device that contains the SIM. It must expose an authenticated HTTPS API reachable by Render; a private LAN-only address such as `192.168.x.x` will not work from Render.
-2. Configure that gateway to accept `{ "to": "+63...", "message": "..." }` requests, using bearer-token authentication, and return a 2xx response only after accepting a message for delivery.
-3. In Render's service **Environment** settings, set `SMS_GATEWAY_URL` to the gateway's HTTPS send-message endpoint and `SMS_GATEWAY_TOKEN` to a strong gateway token. Never add the token to browser code or GitHub.
-4. Redeploy/restart the Render service. In the admin **Payments** page, use **Send SMS** on a renter's outstanding charge. The server verifies the signed Supabase session and administrator role before forwarding the reminder.
-
-If the SIM device is on a home network, use a secure VPN/tunnel or a gateway service with an authenticated public HTTPS endpoint; do not expose an unauthenticated modem or router port to the internet. Availability, costs, and permitted SMS usage depend on the SIM carrier and gateway provider.
+1. Create and verify a Semaphore account at [semaphore.co](https://semaphore.co/) and add SMS credits. Check Semaphore's current rates; outbound SMS pricing may change and VAT may apply.
+2. Copy the API key from your Semaphore account. Do not paste it into chat, source files, or GitHub.
+3. In the Render service **Environment** settings, add `SEMAPHORE_API_KEY` with the key. Render keeps it server-side. If using the legacy SIM gateway instead, configure both `SMS_GATEWAY_URL` and `SMS_GATEWAY_TOKEN`; Semaphore takes precedence if both are configured.
+4. Redeploy/restart the Render service. In the admin **Payments** page, click **Send SMS** on an outstanding charge. The result indicates that Semaphore accepted the message (for example, queued); acceptance does not guarantee delivery. Check the Semaphore dashboard for delivery status and charges.
+5. Test first with a short reminder to a phone number you control. Each message may incur provider charges; long messages can be split into multiple SMS segments.
 
 ## Rental and billing behavior
 

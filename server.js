@@ -24,7 +24,7 @@ app.get("/api/config", (_req, res) => {
     supabaseUrl: process.env.SUPABASE_URL || "",
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
     cloudReady: configured,
-    smsReady: Boolean(process.env.SMS_GATEWAY_URL && process.env.SMS_GATEWAY_TOKEN),
+    smsReady: Boolean(process.env.SEMAPHORE_API_KEY || (process.env.SMS_GATEWAY_URL && process.env.SMS_GATEWAY_TOKEN)),
   });
 });
 
@@ -412,32 +412,86 @@ app.put("/api/admin/renters/:renterId/password", requireAdmin, async (req, res) 
 
 app.post("/api/sms/payment-reminder", requireAdmin, async (req, res) => {
   const { phone, renterName, amount, dueDate } = req.body || {};
-  if (!process.env.SMS_GATEWAY_URL || !process.env.SMS_GATEWAY_TOKEN) {
-    return res.status(503).json({ error: "SIM SMS gateway is not configured." });
+  const semaphoreApiKey = process.env.SEMAPHORE_API_KEY?.trim();
+  const simGatewayConfigured = Boolean(process.env.SMS_GATEWAY_URL && process.env.SMS_GATEWAY_TOKEN);
+  if (!semaphoreApiKey && !simGatewayConfigured) {
+    return res.status(503).json({ error: "SMS is not configured. Set SEMAPHORE_API_KEY in the Render environment." });
   }
-  if (typeof phone !== "string" || !phone.trim() || typeof renterName !== "string" ||
-      typeof amount !== "number" || !Number.isFinite(amount) || typeof dueDate !== "string") {
+  const recipientNumber = typeof phone === "string" ? phone.trim().replace(/[\s()-]/g, "") : "";
+  if (!/^\+?\d{7,15}$/.test(recipientNumber) ||
+      typeof renterName !== "string" || !renterName.trim() || renterName.trim().length > 120 ||
+      typeof amount !== "number" || !Number.isFinite(amount) || amount < 0 ||
+      typeof dueDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
     return res.status(400).json({ error: "Valid renter phone and payment details are required." });
   }
 
-  const message = `Hello ${renterName}, this is a payment reminder from Nanay Inday's Rentals. PHP ${amount.toFixed(2)} is due ${dueDate}. Please contact us if you have already paid.`;
+  const message = `Hello ${renterName.trim()}, this is a payment reminder from Nanay Inday's Rentals. PHP ${amount.toFixed(2)} is due ${dueDate}. Please contact us if you have already paid.`;
   try {
+    if (semaphoreApiKey) {
+      const form = new URLSearchParams({
+        apikey: semaphoreApiKey,
+        number: recipientNumber,
+        message,
+      });
+      const providerResponse = await fetch("https://api.semaphore.co/api/v4/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form,
+        signal: AbortSignal.timeout(15000),
+      });
+      const responseText = await providerResponse.text();
+      let responseBody;
+      try {
+        responseBody = JSON.parse(responseText);
+      } catch {
+        responseBody = null;
+      }
+
+      if (!providerResponse.ok) {
+        const providerMessage = responseBody && !Array.isArray(responseBody)
+          ? responseBody.error || responseBody.message
+          : null;
+        return res.status(502).json({
+          error: typeof providerMessage === "string"
+            ? `Semaphore rejected the SMS request: ${providerMessage}`
+            : `Semaphore returned HTTP ${providerResponse.status}. Check the API key and account balance.`,
+        });
+      }
+
+      const results = Array.isArray(responseBody) ? responseBody : [responseBody];
+      const acceptedMessage = results.find((item) =>
+        item && typeof item === "object" &&
+        ["queued", "pending", "sent"].includes(String(item.status || "").toLowerCase())
+      );
+      if (!acceptedMessage) {
+        return res.status(502).json({ error: "Semaphore did not accept the SMS. Check its API response and account balance." });
+      }
+
+      return res.json({
+        sent: true,
+        accepted: true,
+        provider: "Semaphore",
+        status: String(acceptedMessage.status).toLowerCase(),
+        messageId: acceptedMessage.message_id || null,
+      });
+    }
+
     const gatewayResponse = await fetch(process.env.SMS_GATEWAY_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${process.env.SMS_GATEWAY_TOKEN}`,
       },
-      body: JSON.stringify({ to: phone.trim(), message }),
+      body: JSON.stringify({ to: recipientNumber, message }),
       signal: AbortSignal.timeout(10000),
     });
     if (!gatewayResponse.ok) {
       return res.status(502).json({ error: `SMS gateway returned HTTP ${gatewayResponse.status}.` });
     }
-    res.json({ sent: true });
+    res.json({ sent: true, accepted: true, provider: "SIM gateway" });
   } catch (error) {
-    console.error("SMS gateway request failed:", error.message);
-    res.status(502).json({ error: "Could not reach the SIM SMS gateway." });
+    console.error("SMS provider request failed:", error.message);
+    res.status(502).json({ error: "Could not reach the SMS provider. Check the Render service logs and try again." });
   }
 });
 

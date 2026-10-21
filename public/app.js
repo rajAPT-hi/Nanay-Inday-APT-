@@ -1493,7 +1493,9 @@ async function sendSms(id) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "SMS could not be sent.");
-    toast("SMS payment reminder sent.");
+    toast(data.provider === "Semaphore"
+      ? `SMS accepted by Semaphore (${data.status}). Delivery may take a moment.`
+      : "SMS payment reminder sent.");
   } catch (error) { toast(error.message || "Could not send SMS.", true); }
 }
 
