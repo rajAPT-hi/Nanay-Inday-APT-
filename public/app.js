@@ -262,7 +262,7 @@ function renderRenterTable(renters) {
     ${renters.map((renter) => `<tr>
       <td>
         <div class="person-cell"><div class="avatar">${initials(renter.full_name)}</div><div>
-          <strong>${escapeHtml(renter.full_name)}</strong><small>${escapeHtml(renter.email)}</small>
+          <strong>${escapeHtml(renter.full_name)}</strong><small>${escapeHtml(renter.email || "No email on file")}</small>
           <button class="text-button payment-history-button" data-action="renter-payment-history" data-id="${escapeHtml(renter.id)}">View payment history</button>
         </div></div>
       </td>
@@ -470,7 +470,7 @@ function modal(title, body, actions) {
 function addRenterModal() {
   const start = new Date().toISOString().slice(0, 10);
   modal("Add a new renter", `<form id="renter-form"><div class="form-grid">
-    <div class="field"><label>Full name</label><input name="full_name" required /></div><div class="field"><label>Email for renter login</label><input name="email" type="email" required /></div>
+    <div class="field"><label>Full name</label><input name="full_name" required /></div><div class="field"><label>Renter email (optional)</label><input name="email" type="email" autocomplete="email" /></div>
     <div class="field"><label>Phone number</label><input name="phone" type="tel" placeholder="+63..." /></div><div class="field"><label>Unit name / number</label><input name="unit_name" placeholder="Room 01" required /></div>
     <div class="field"><label>Rental location</label><select name="location" required><option value="">Select location</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag"].map((location) => `<option>${location}</option>`).join("")}</select></div>
     <div class="field"><label>Rental type</label><select name="rental_type"><option>Room</option><option>House</option><option>Apartment</option></select></div>
@@ -478,8 +478,8 @@ function addRenterModal() {
     <div class="field"><label>Contract start</label><input name="contract_start" type="date" value="${start}" required /></div>
     <div class="field"><label>Monthly rent (PHP)</label><input name="rent_amount" type="number" min="0" step="0.01" required /></div>
     <div class="field"><label>Rent due day (each month)</label><input name="rent_due_day" type="number" min="1" max="31" step="1" value="5" required /></div>
-    <div class="field"><label>Renter login password</label><input name="password" type="password" autocomplete="new-password" minlength="12" required /></div>
-    <div class="field full notice">Set a temporary password with at least 12 characters. Share it with the renter privately, and ask them to change it after signing in. The password is sent directly to Supabase Auth and is never saved in the rental record.</div></div></form>`,
+    <div class="field"><label>Renter login password (optional)</label><input name="password" type="password" autocomplete="new-password" minlength="12" /></div>
+    <div class="field full notice">Leave email and password blank to add the renter without login access. You can create their login later from this renter's row. To create a login now, provide both a valid email and a password with at least 12 characters.</div></div></form>`,
   `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="save-renter">Add renter</button>`);
 }
 function changeRenterPasswordModal(renterId) {
@@ -495,8 +495,9 @@ function createRenterAccountModal(renterId) {
   const renter = renterById(renterId);
   if (!renter.id || renter.user_id) return toast("This renter already has a linked login account.", true);
   modal(`Create renter login · ${escapeHtml(renter.full_name)}`, `<form id="create-renter-account-form" data-renter-id="${escapeHtml(renterId)}">
-    <div class="notice">This creates a Supabase login for the renter and links it to this rental record. The email address on file is <strong>${escapeHtml(renter.email)}</strong>. Share the password privately.</div>
+    <div class="notice">This creates a Supabase login for the renter and links it to this rental record. Share the password privately.</div>
     <div class="form-grid" style="margin-top:16px">
+      <div class="field full"><label>Login email</label><input name="email" type="email" autocomplete="email" value="${escapeHtml(renter.email || "")}" required /></div>
       <div class="field full"><label>Temporary password (at least 12 characters)</label><input name="password" type="password" autocomplete="new-password" minlength="12" required /></div>
       <div class="field full"><label>Confirm temporary password</label><input name="confirm_password" type="password" autocomplete="new-password" minlength="12" required /></div>
     </div></form>`,
@@ -515,6 +516,7 @@ async function createRenterAccount(renterId) {
   }
   try {
     const result = await adminRequest(`/api/admin/renters/${encodeURIComponent(renterId)}/account`, "POST", {
+      email: values.email,
       password: values.password,
     });
     const renter = renterById(renterId);
@@ -870,7 +872,7 @@ async function saveRenter() {
   if (submitButton?.disabled) return;
   if (submitButton) {
     submitButton.disabled = true;
-    submitButton.textContent = "Creating renter account...";
+    submitButton.textContent = "Adding renter...";
   }
   const renter = {
     full_name: data.full_name.trim(), email: data.email.trim(), phone: data.phone.trim(),
@@ -878,9 +880,10 @@ async function saveRenter() {
     rental_type: data.rental_type, contract_months: Number(data.contract_months),
     contract_start: data.contract_start, contract_end: calculateContractEnd(data.contract_start, data.contract_months), rent_amount: Number(data.rent_amount),
   };
+  let createdRenter;
   try {
     {
-      const { data: invited, error: inviteError } = await fetch("/api/admin/renters", {
+      const { data: created, error: createError } = await fetch("/api/admin/renters", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${(await supabase.auth.getSession()).data.session.access_token}` },
         body: JSON.stringify({
@@ -899,15 +902,18 @@ async function saveRenter() {
         }),
       }).then(async (response) => {
         const json = await response.json();
-        if (!response.ok) throw new Error(json.error || "Could not invite renter.");
+        if (!response.ok) throw new Error(json.error || "Could not add renter.");
         return { data: json, error: null };
       });
-      if (inviteError) throw inviteError;
-      state.renters.unshift(invited.renter);
+      if (createError) throw createError;
+      createdRenter = created.renter;
+      state.renters.unshift(createdRenter);
     }
     document.querySelector(".modal-backdrop")?.remove();
     render();
-    toast("Renter account created with the password you set.");
+    toast(createdRenter.user_id
+      ? "Renter account created with the password you set."
+      : "Renter added without login access. Create a login from the renter row when ready.");
   } catch (error) {
     toast(error.message || "Could not add renter.", true);
   } finally {
@@ -1408,9 +1414,16 @@ document.addEventListener("submit", async (event) => {
     if (supabase) await supabase.auth.signOut();
     state.user = null;
     state.role = null;
-    state.loginMessage = error.message || "Could not sign in.";
+    const invalidCredentials = error?.code === "invalid_credentials" || /invalid login credentials/i.test(error?.message || "");
+    state.loginMessage = invalidCredentials
+      ? "We could not sign you in. Check your email and password."
+      : error.message || "Could not sign in.";
     state.terminationNotice = error.terminationReason || null;
     render();
+    if (invalidCredentials) {
+      modal("Account does not exist", `<p>This account may not have been set up by an administrator yet, or the email or password may be incorrect.</p><p>Please contact support or your property administrator to set up your login or verify your account details.</p>`,
+        `<button class="button primary" data-action="close-modal">Close</button>`);
+    }
   } finally {
     if (button.isConnected) { button.disabled = false; button.textContent = "Sign in"; }
   }

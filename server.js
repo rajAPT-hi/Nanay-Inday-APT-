@@ -249,42 +249,50 @@ async function sendUpcomingRentReminders() {
 
 app.post("/api/admin/renters", requireAdmin, async (req, res) => {
   const body = req.body || {};
-  const requiredText = ["email", "name", "unitName", "rentalType", "contractStart"];
+  const requiredText = ["name", "unitName", "rentalType", "contractStart"];
+  const emailInput = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const password = typeof body.password === "string" ? body.password : "";
   if (requiredText.some((key) => typeof body[key] !== "string" || !body[key].trim()) ||
       !["Room", "House", "Apartment"].includes(body.rentalType) ||
       !["Vasquez", "Villa", "Cabalawan", "Kaskag"].includes(body.location) ||
       ![6, 12].includes(Number(body.contractMonths)) ||
       !Number.isInteger(body.rentDueDay) || body.rentDueDay < 1 || body.rentDueDay > 31 ||
       typeof body.rentAmount !== "number" || !Number.isFinite(body.rentAmount) || body.rentAmount < 0 ||
-      typeof body.password !== "string" || body.password.length < 12 ||
+      (body.email !== undefined && body.email !== null && typeof body.email !== "string") ||
+      (emailInput && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput)) ||
+      (password && (!emailInput || password.length < 12)) ||
+      (body.password !== undefined && typeof body.password !== "string") ||
       !/^\d{4}-\d{2}-\d{2}$/.test(body.contractStart) ||
       !/^\d{4}-\d{2}-\d{2}$/.test(body.contractEnd)) {
-    return res.status(400).json({ error: "Provide valid renter details and a password of at least 12 characters." });
+    return res.status(400).json({ error: "Provide valid renter details. To create a login now, provide a valid email and a password of at least 12 characters." });
   }
 
-  const email = body.email.trim().toLowerCase();
-  const { data: created, error: createError } = await adminClient.auth.admin.createUser({
-    email,
-    password: body.password,
-    email_confirm: true,
-    user_metadata: {
-      full_name: body.name.trim(),
-      phone: typeof body.phone === "string" ? body.phone.trim() : "",
-    },
-  });
-  if (createError) {
-    const duplicateEmail = /already|registered|exists/i.test(createError.message);
-    return res.status(400).json({
-      error: duplicateEmail
-        ? `The email ${email} already belongs to a Supabase account. Use a unique renter email, or add the renter first and check their existing login.`
-        : `Supabase could not create the renter login: ${createError.message}`,
+  let createdUser = null;
+  if (password) {
+    const { data: created, error: createError } = await adminClient.auth.admin.createUser({
+      email: emailInput,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        full_name: body.name.trim(),
+        phone: typeof body.phone === "string" ? body.phone.trim() : "",
+      },
     });
+    if (createError) {
+      const duplicateEmail = /already|registered|exists/i.test(createError.message);
+      return res.status(400).json({
+        error: duplicateEmail
+          ? `The email ${emailInput} already belongs to a Supabase account. Use a unique renter email, or add the renter first and check their existing login.`
+          : `Supabase could not create the renter login: ${createError.message}`,
+      });
+    }
+    createdUser = created.user;
   }
 
   const { data: renter, error: renterError } = await adminClient.from("renters").insert({
-    user_id: created.user.id,
+    user_id: createdUser?.id || null,
     full_name: body.name.trim(),
-    email,
+    email: emailInput || null,
     phone: typeof body.phone === "string" ? body.phone.trim() : "",
     unit_name: body.unitName.trim(),
     location: body.location,
@@ -297,8 +305,10 @@ app.post("/api/admin/renters", requireAdmin, async (req, res) => {
   }).select().single();
 
   if (renterError) {
-    const { error: rollbackError } = await adminClient.auth.admin.deleteUser(created.user.id);
-    if (rollbackError) console.error("Could not remove auth user after renter creation failed:", rollbackError.message);
+    if (createdUser) {
+      const { error: rollbackError } = await adminClient.auth.admin.deleteUser(createdUser.id);
+      if (rollbackError) console.error("Could not remove auth user after renter creation failed:", rollbackError.message);
+    }
     return res.status(400).json({ error: renterError.message });
   }
   res.status(201).json({ renter });
@@ -306,6 +316,10 @@ app.post("/api/admin/renters", requireAdmin, async (req, res) => {
 
 app.post("/api/admin/renters/:renterId/account", requireAdmin, async (req, res) => {
   const { password } = req.body || {};
+  const emailInput = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  if (typeof req.body?.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput)) {
+    return res.status(400).json({ error: "Enter a valid email address for the renter login." });
+  }
   if (typeof password !== "string" || password.length < 12) {
     return res.status(400).json({ error: "The renter password must be at least 12 characters." });
   }
@@ -316,13 +330,8 @@ app.post("/api/admin/renters/:renterId/account", requireAdmin, async (req, res) 
   if (!renter) return res.status(404).json({ error: "Renter record not found." });
   if (renter.status === "terminated") return res.status(409).json({ error: "A terminated renter cannot be given a new login." });
   if (renter.user_id) return res.status(409).json({ error: "This renter already has a linked login account." });
-  if (typeof renter.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(renter.email.trim())) {
-    return res.status(400).json({ error: "Add a valid email address to the renter record before creating a login." });
-  }
-
-  const email = renter.email.trim().toLowerCase();
   const { data: created, error: createError } = await adminClient.auth.admin.createUser({
-    email,
+    email: emailInput,
     password,
     email_confirm: true,
     user_metadata: {
@@ -334,13 +343,13 @@ app.post("/api/admin/renters/:renterId/account", requireAdmin, async (req, res) 
     const duplicateEmail = /already|registered|exists/i.test(createError.message);
     return res.status(400).json({
       error: duplicateEmail
-        ? `The email ${email} already belongs to a Supabase account. Use a unique renter email, or have an administrator check the existing account.`
+        ? `The email ${emailInput} already belongs to a Supabase account. Use a unique renter email, or have an administrator check the existing account.`
         : `Supabase could not create the renter login: ${createError.message}`,
     });
   }
 
   const { data: linkedRenter, error: linkError } = await adminClient.from("renters")
-    .update({ user_id: created.user.id, email })
+    .update({ user_id: created.user.id, email: emailInput })
     .eq("id", renter.id)
     .is("user_id", null)
     .select("id")
@@ -351,7 +360,7 @@ app.post("/api/admin/renters/:renterId/account", requireAdmin, async (req, res) 
     if (linkError) return res.status(400).json({ error: `The login was created but could not be linked to the renter: ${linkError.message}` });
     return res.status(409).json({ error: "This renter was linked to another account while you were creating the login. Refresh the page and try again." });
   }
-  res.status(201).json({ linked: true, userId: created.user.id, email });
+  res.status(201).json({ linked: true, userId: created.user.id, email: emailInput });
 });
 
 app.put("/api/admin/renters/:renterId/password", requireAdmin, async (req, res) => {

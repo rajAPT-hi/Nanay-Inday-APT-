@@ -16,7 +16,7 @@ create table if not exists public.renters (
   id uuid primary key default gen_random_uuid(),
   user_id uuid unique references auth.users(id) on delete set null,
   full_name text not null,
-  email text not null,
+  email text,
   phone text not null default '',
   unit_name text not null,
   location text check (location in ('Vasquez', 'Villa', 'Cabalawan', 'Kaskag')),
@@ -42,6 +42,9 @@ alter table public.renters
   add column if not exists contract_image_path text,
   add column if not exists location text,
   add column if not exists rent_due_day integer not null default 5;
+
+alter table public.renters
+  alter column email drop not null;
 
 alter table public.renters
   drop constraint if exists renters_location_check,
