@@ -21,6 +21,7 @@ let state = {
   cleared_payment_charges: [],
   rent_payment_schedule_checks: [],
   dismissedScheduleCheckDate: null,
+  renterStatusFilter: "active",
   renterAdminNotes: {},
   terminationNotice: null,
   settings: {
@@ -306,7 +307,12 @@ function calculateContractEnd(start, months) {
   return endDate.toISOString().slice(0, 10);
 }
 function renderRenterTable(renters) {
-  if (!renters.length) return `<div class="empty"><span>♙</span>No renters yet. Add your first renter to get started.</div>`;
+  if (!renters.length) {
+    const emptyMessage = state.tab === "renters" && state.renters.length
+      ? "No renters match these filters."
+      : "No renters yet. Add your first renter to get started.";
+    return `<div class="empty"><span>♙</span>${emptyMessage}</div>`;
+  }
   return `<div class="table-wrap"><table><thead><tr><th>RENTER</th><th>UNIT / LOCATION</th><th>RENT / MONTH</th><th>RENT DUE</th><th>CONTRACT ENDS</th><th>STATUS</th><th>LEASE / DOCUMENTS</th></tr></thead><tbody>
     ${renters.map((renter) => `<tr>
       <td>
@@ -324,11 +330,65 @@ function renderRenterTable(renters) {
     </tr>`).join("")}
     </tbody></table></div>`;
 }
+function renterPaymentSummaryMarkup(renters) {
+  const renterIds = new Set(renters.map((renter) => renter.id));
+  const today = manilaDateString();
+  const payments = state.payments.filter((payment) => renterIds.has(payment.renter_id));
+  const upcoming = payments
+    .filter((payment) => payment.status !== "paid" && payment.due_date >= today)
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
+  const outstanding = payments.filter((payment) => payment.status !== "paid");
+  const previous = payments
+    .filter((payment) => payment.due_date < today)
+    .sort((a, b) => b.due_date.localeCompare(a.due_date));
+  const previousPaid = previous.filter((payment) => payment.status === "paid");
+  const upcomingRows = upcoming.slice(0, 8).map((payment) => `<tr>
+    <td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")} · ${escapeHtml(renterById(payment.renter_id).unit_name || "Unit not set")}</td>
+    <td>${escapeHtml(payment.period)}</td>
+    <td>${formatDate(payment.due_date)}</td>
+    <td>${money(payment.amount)}</td>
+    <td>${statusBadge(paymentStatus(payment))}</td>
+  </tr>`).join("");
+  const recentRows = previous.slice(0, 8).map((payment) => `<tr>
+    <td>${escapeHtml(renterById(payment.renter_id).full_name || "Renter")} · ${escapeHtml(renterById(payment.renter_id).unit_name || "Unit not set")}</td>
+    <td>${escapeHtml(payment.period)}</td>
+    <td>${formatDate(payment.due_date)}</td>
+    <td>${money(payment.amount)}</td>
+    <td>${statusBadge(paymentStatus(payment))}</td>
+  </tr>`).join("");
+  return `<section class="card" style="margin:0 0 16px">
+    <div class="card-head"><div><h3>${state.renterStatusFilter === "all" ? "All renter" : state.renterStatusFilter === "terminated" ? "Terminated renter" : "Active renter"} payment summary</h3><p class="muted-note">Totals and previous payment records for the renters currently shown below.</p></div></div>
+    <div class="stats">
+      <div class="stat"><div class="stat-head"><span>Upcoming payments</span><span class="stat-icon">◷</span></div><strong>${money(upcoming.reduce((total, payment) => total + Number(payment.amount), 0))}</strong><small>${upcoming.length} scheduled unpaid charge${upcoming.length === 1 ? "" : "s"}</small></div>
+      <div class="stat"><div class="stat-head"><span>Outstanding</span><span class="stat-icon">₱</span></div><strong>${money(outstanding.reduce((total, payment) => total + Number(payment.amount), 0))}</strong><small>${outstanding.length} unpaid charge${outstanding.length === 1 ? "" : "s"}, including overdue</small></div>
+      <div class="stat"><div class="stat-head"><span>Previous records</span><span class="stat-icon">▤</span></div><strong>${previous.length}</strong><small>${previousPaid.length} paid · ${money(previousPaid.reduce((total, payment) => total + (Number(payment.paid_amount) || Number(payment.amount)), 0))} collected</small></div>
+    </div>
+    <h4 style="margin:16px 0 8px">Upcoming scheduled payments</h4>
+    ${upcomingRows ? `<div class="table-wrap"><table><thead><tr><th>RENTER / UNIT</th><th>PERIOD</th><th>DUE DATE</th><th>CHARGE</th><th>STATUS</th></tr></thead><tbody>${upcomingRows}</tbody></table></div>${upcoming.length > 8 ? `<p class="muted-note">Showing 8 of ${upcoming.length} scheduled unpaid charges.</p>` : ""}` : `<p class="muted-note">No scheduled unpaid payments for this view.</p>`}
+    <h4 style="margin:16px 0 8px">Previous payment records</h4>
+    ${recentRows ? `<div class="table-wrap"><table><thead><tr><th>RENTER / UNIT</th><th>PERIOD</th><th>DUE DATE</th><th>CHARGE</th><th>STATUS</th></tr></thead><tbody>${recentRows}</tbody></table></div>${previous.length > 8 ? `<p class="muted-note">Showing 8 of ${previous.length} previous records. Open a renter's payment history for all records.</p>` : ""}` : `<p class="muted-note">No previous payment records for this view.</p>`}
+  </section>`;
+}
 function rentersPage() {
+  const visibleRenters = filterRenters(state.renters);
   return `<div class="section-title"><div><p>Manage lease terms, record the reason for changes, terminate leases, and securely store renter documents.</p></div></div>
     ${renewalRequestsAdminPanel()}
     <div class="toolbar"><input class="search" id="renter-search" placeholder="⌕  Search renters, units, or locations..." /><select class="filter" id="renter-filter"><option value="all">All rental types</option><option>Room</option><option>House</option><option>Apartment</option></select><select class="filter" id="renter-location-filter"><option value="all">All locations</option>${["Vasquez", "Villa", "Cabalawan", "Kaskag", "Cebu"].map((location) => `<option>${location}</option>`).join("")}</select></div>
-    <div class="card" id="renter-table">${renderRenterTable(state.renters)}</div>`;
+    <div class="view-filter" role="group" aria-label="Filter renters by contract status">
+      ${[["active", "Active"], ["terminated", "Terminated"], ["all", "All"]].map(([value, label]) => `<button class="button ${state.renterStatusFilter === value ? "primary" : "secondary"}" data-action="filter-renter-status" data-status="${value}" aria-pressed="${state.renterStatusFilter === value}">${label} (${state.renters.filter((renter) => value === "all" || renter.status === value).length})</button>`).join("")}
+    </div>
+    <div id="renter-payment-summary">${renterPaymentSummaryMarkup(visibleRenters)}</div>
+    <div class="card" id="renter-table">${renderRenterTable(visibleRenters)}</div>`;
+}
+function filterRenters(renters) {
+  const query = document.querySelector("#renter-search")?.value.toLowerCase() || "";
+  const type = document.querySelector("#renter-filter")?.value || "all";
+  const location = document.querySelector("#renter-location-filter")?.value || "all";
+  return renters.filter((renter) =>
+    (state.renterStatusFilter === "all" || renter.status === state.renterStatusFilter) &&
+    (type === "all" || renter.rental_type === type) &&
+    (location === "all" || renter.location === location) &&
+    `${renter.full_name} ${renter.email || ""} ${renter.unit_name} ${renter.location || ""}`.toLowerCase().includes(query));
 }
 function renewalRequestsAdminPanel() {
   const pending = state.lease_renewal_requests.filter((request) => request.status === "pending");
@@ -1543,6 +1603,17 @@ document.addEventListener("click", async (event) => {
     return;
   }
   const { action, id } = target.dataset;
+  if (action === "filter-renter-status") {
+    if (state.role !== "admin" || !["active", "terminated", "all"].includes(target.dataset.status)) return;
+    state.renterStatusFilter = target.dataset.status;
+    document.querySelectorAll('[data-action="filter-renter-status"]').forEach((button) => {
+      const selected = button.dataset.status === state.renterStatusFilter;
+      button.classList.toggle("primary", selected);
+      button.classList.toggle("secondary", !selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    return updateRenterTableFromFilters();
+  }
   if (action === "logout") {
     if (supabase) {
       const { error } = await supabase.auth.signOut();
@@ -1720,13 +1791,9 @@ document.addEventListener("change", (event) => {
   if (event.target.matches("#overview-upcoming-start-date, #overview-upcoming-end-date")) updateUpcomingPayments();
 });
 function updateRenterTableFromFilters() {
-  const query = document.querySelector("#renter-search")?.value.toLowerCase() || "";
-  const type = document.querySelector("#renter-filter")?.value || "all";
-  const location = document.querySelector("#renter-location-filter")?.value || "all";
-  const matches = state.renters.filter((renter) =>
-    (type === "all" || renter.rental_type === type) &&
-    (location === "all" || renter.location === location) &&
-    `${renter.full_name} ${renter.email} ${renter.unit_name} ${renter.location || ""}`.toLowerCase().includes(query));
+  const matches = filterRenters(state.renters);
+  const summary = document.querySelector("#renter-payment-summary");
+  if (summary) summary.innerHTML = renterPaymentSummaryMarkup(matches);
   const table = document.querySelector("#renter-table");
   if (table) table.innerHTML = renderRenterTable(matches);
 }
