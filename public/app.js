@@ -20,6 +20,7 @@ let state = {
   lease_renewal_requests: [],
   cleared_payment_charges: [],
   rent_payment_schedule_checks: [],
+  dismissedScheduleCheckDate: null,
   renterAdminNotes: {},
   terminationNotice: null,
   settings: {
@@ -319,7 +320,7 @@ function renderRenterTable(renters) {
       <td>${dayLabel(renter.rent_due_day)} of each month</td>
       <td>${formatDate(renter.contract_end)}</td>
       <td>${statusBadge(contractStatus(renter))}</td>
-      <td>${renter.status !== "terminated" ? `<button class="text-button" data-action="edit-lease" data-id="${escapeHtml(renter.id)}">Edit lease</button><button class="text-button" style="color:var(--red)" data-action="terminate-lease" data-id="${escapeHtml(renter.id)}">Terminate</button>` : ""}<button class="text-button" data-action="renter-notes" data-id="${escapeHtml(renter.id)}">${state.renterAdminNotes[renter.id] ? "Admin notes · Edit" : "Admin notes"}</button><button class="text-button" data-action="renter-documents" data-id="${escapeHtml(renter.id)}">Documents</button><button class="text-button" data-action="lease-history" data-id="${escapeHtml(renter.id)}">Lease history</button>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${escapeHtml(renter.id)}">Password</button>` : renter.status !== "terminated" ? `<button class="text-button" data-action="create-renter-account" data-id="${escapeHtml(renter.id)}">Create login</button>` : ""}</td>
+      <td>${renter.status !== "terminated" ? `<button class="text-button" data-action="edit-lease" data-id="${escapeHtml(renter.id)}">Edit lease</button><button class="text-button" style="color:var(--red)" data-action="terminate-lease" data-id="${escapeHtml(renter.id)}">Terminate</button>` : `<button class="text-button" style="color:var(--red)" data-action="remove-terminated-login" data-id="${escapeHtml(renter.id)}">Remove login &amp; email</button>`}<button class="text-button" data-action="renter-notes" data-id="${escapeHtml(renter.id)}">${state.renterAdminNotes[renter.id] ? "Admin notes · Edit" : "Admin notes"}</button><button class="text-button" data-action="renter-documents" data-id="${escapeHtml(renter.id)}">Documents</button><button class="text-button" data-action="lease-history" data-id="${escapeHtml(renter.id)}">Lease history</button>${renter.user_id ? `<button class="text-button" data-action="change-renter-password" data-id="${escapeHtml(renter.id)}">Password</button>` : renter.status !== "terminated" ? `<button class="text-button" data-action="create-renter-account" data-id="${escapeHtml(renter.id)}">Create login</button>` : ""}</td>
     </tr>`).join("")}
     </tbody></table></div>`;
 }
@@ -362,9 +363,11 @@ function rentPaymentScheduleAuditMarkup() {
   if (state.role !== "admin") return "";
   const checks = state.rent_payment_schedule_checks;
   if (!checks.length) {
-    return `<section class="card" style="margin-bottom:16px"><div class="card-head"><h3>Monthly charge schedule check</h3></div><p class="muted-note">No checks have run yet. Applying the latest schema runs an initial check for this month and next month. Scheduled checks run on the 1st and 30th.</p></section>`;
+    if (state.dismissedScheduleCheckDate === "none") return "";
+    return `<section class="card" style="margin-bottom:16px"><div class="card-head"><h3>Monthly charge schedule check</h3><button class="button secondary" data-action="dismiss-schedule-check" data-check-date="none">Dismiss message</button></div><p class="muted-note">No checks have run yet. Applying the latest schema runs an initial check for this month and next month. Scheduled checks run on the 1st and 30th.</p></section>`;
   }
   const latestCheckDate = checks[0].checked_on;
+  if (state.dismissedScheduleCheckDate === latestCheckDate) return "";
   const latestChecks = checks.filter((check) => check.checked_on === latestCheckDate);
   const issues = latestChecks.filter((check) =>
     check.monthly_charge_count === 0 ||
@@ -387,11 +390,16 @@ function rentPaymentScheduleAuditMarkup() {
     </tr>`;
   }).join("");
   return `<section class="card" style="margin-bottom:16px">
-    <div class="card-head"><div><h3>Monthly charge schedule check</h3><p class="muted-note">Checks current and next month per apartment; it never changes charges.</p></div><small>Last check: ${formatDate(latestCheckDate)}</small></div>
+    <div class="card-head"><div><h3>Monthly charge schedule check</h3><p class="muted-note">Checks current and next month per apartment; it never changes charges.</p><small>Last check: ${formatDate(latestCheckDate)}</small></div><button class="button secondary" data-action="dismiss-schedule-check" data-check-date="${escapeHtml(latestCheckDate)}">Dismiss message</button></div>
     ${issues.length
       ? `<p class="notice">${issues.length} schedule issue${issues.length === 1 ? "" : "s"} found. Review the apartment and month before editing any charges.</p><div class="table-wrap"><table><thead><tr><th>RENTER / APARTMENT</th><th>MONTH</th><th>EXPECTED DUE DATE</th><th>RENT CHARGES FOUND</th><th>CHECK</th></tr></thead><tbody>${issueRows}</tbody></table></div>`
       : `<p class="muted-note">No missing, duplicate, or incorrectly dated rent charges were found in the latest check.</p>`}
   </section>`;
+}
+function confirmDismissScheduleCheck(checkDate) {
+  if (state.role !== "admin") return toast("Only an administrator can dismiss this message.", true);
+  modal("Dismiss schedule check?", `<p>Are you sure you want to dismiss this monthly charge schedule check message? It will stay hidden until you refresh or a new check runs.</p>`,
+    `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button primary" data-action="confirm-dismiss-schedule-check" data-check-date="${escapeHtml(checkDate)}">Yes, dismiss</button>`);
 }
 function paymentDateRangeControls(prefix) {
   const startId = `${prefix}-start-date`;
@@ -779,6 +787,33 @@ function terminateLeaseModal(renterId) {
     <div class="notice danger-notice">This immediately disables this renter's app access. Their renter record, payment history, and documents will be retained for administrators.</div>
     <div class="field" style="margin-top:16px"><label>Required termination reason</label><textarea name="reason" minlength="3" maxlength="1000" placeholder="Example: Lease ended or non-payment" required></textarea></div>
     </form>`, `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button danger" data-action="confirm-termination">Terminate lease</button>`);
+}
+function removeTerminatedRenterLoginModal(renterId) {
+  if (state.role !== "admin") return toast("Only an administrator can remove a renter login.", true);
+  const renter = renterById(renterId);
+  if (renter.status !== "terminated") return toast("Only terminated contracts can have their login removed.", true);
+  modal(`Remove login · ${escapeHtml(renter.full_name)}`, `<div class="notice danger-notice">This removes the linked renter login from Supabase Auth and clears the email on this contract, so the email can be used again. The terminated contract, payment and utility history, notes, lease history, and documents will be kept. If there is no linked renter login, no other Supabase account will be deleted.</div>`,
+    `<button class="button secondary" data-action="close-modal">Cancel</button><button class="button danger" data-action="confirm-remove-terminated-login" data-id="${escapeHtml(renterId)}">Remove login &amp; clear email</button>`);
+}
+async function removeTerminatedRenterLogin(renterId) {
+  let result;
+  try {
+    result = await adminRequest(`/api/admin/renters/${encodeURIComponent(renterId)}/login`, "DELETE");
+  } catch (error) {
+    return toast(error.message || "Could not remove the terminated renter login.", true);
+  }
+  try {
+    await fetchCloudData();
+  } catch (error) {
+    document.querySelector(".modal-backdrop")?.remove();
+    render();
+    return toast(`Login and contract email were updated, but the renter list could not be refreshed: ${error.message || "Unknown error."}`, true);
+  }
+  document.querySelector(".modal-backdrop")?.remove();
+  render();
+  toast(result.loginDeleted
+    ? "Linked login removed and contract email cleared. Contract and history were kept."
+    : "Contract email cleared; no linked login was found. Check Supabase Auth if the email is still unavailable.");
 }
 function renterDocumentsModal(renterId) {
   const renter = renterById(renterId);
@@ -1533,6 +1568,8 @@ document.addEventListener("click", async (event) => {
   if (action === "save-lease") return saveLease();
   if (action === "terminate-lease") return terminateLeaseModal(id);
   if (action === "confirm-termination") return terminateLease();
+  if (action === "remove-terminated-login") return removeTerminatedRenterLoginModal(id);
+  if (action === "confirm-remove-terminated-login") return removeTerminatedRenterLogin(id);
   if (action === "request-lease-renewal") return requestLeaseRenewalModal(id);
   if (action === "submit-renewal-request") return submitLeaseRenewalRequest();
   if (action === "refresh-renewal-requests") return refreshLeaseRenewalRequests();
@@ -1565,6 +1602,13 @@ document.addEventListener("click", async (event) => {
   if (action === "clear-payment-charge") return clearPaymentChargeModal(id);
   if (action === "confirm-clear-payment-charge") return clearPaymentCharge();
   if (action === "view-cleared-payment-charges") return clearedPaymentChargesModal();
+  if (action === "dismiss-schedule-check") return confirmDismissScheduleCheck(target.dataset.checkDate);
+  if (action === "confirm-dismiss-schedule-check") {
+    if (state.role !== "admin") return toast("Only an administrator can dismiss this message.", true);
+    state.dismissedScheduleCheckDate = target.dataset.checkDate;
+    document.querySelector(".modal-backdrop")?.remove();
+    return render();
+  }
   if (action === "receipt") return showReceipt(id);
   if (action === "online-proof") return showOnlineProof(id);
   if (action === "delete-payment-proof") return deletePaymentProof(id, target.dataset.kind);

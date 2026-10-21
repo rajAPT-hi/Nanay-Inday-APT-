@@ -340,6 +340,68 @@ app.put("/api/admin/renters/:renterId/notes", requireAdmin, async (req, res) => 
   res.json({ saved: true });
 });
 
+app.delete("/api/admin/renters/:renterId/login", requireAdmin, async (req, res) => {
+  const { data: renter, error: renterError } = await adminClient
+    .from("renters")
+    .select("id, user_id, email, status")
+    .eq("id", req.params.renterId)
+    .maybeSingle();
+  if (renterError) return res.status(500).json({ error: "Could not look up the terminated renter." });
+  if (!renter) return res.status(404).json({ error: "Renter record not found." });
+  if (renter.status !== "terminated") {
+    return res.status(409).json({ error: "Only a terminated renter's login can be removed." });
+  }
+
+  let loginDeleted = false;
+  if (renter.user_id) {
+    const { data: profile, error: profileError } = await adminClient
+      .from("profiles")
+      .select("role")
+      .eq("id", renter.user_id)
+      .maybeSingle();
+    if (profileError) return res.status(500).json({ error: "Could not verify the linked account." });
+    if (profile?.role !== "renter") {
+      return res.status(409).json({ error: "The linked account is not a verified renter account. No changes were made." });
+    }
+
+    const { data: authResult, error: authLookupError } = await adminClient.auth.admin.getUserById(renter.user_id);
+    if (authLookupError) return res.status(500).json({ error: "Could not verify the linked Supabase login." });
+    if (!authResult.user) return res.status(409).json({ error: "The linked Supabase login could not be found. No changes were made." });
+    if (renter.email && authResult.user.email?.trim().toLowerCase() !== renter.email.trim().toLowerCase()) {
+      return res.status(409).json({
+        error: "The linked login email does not match the contract email. No changes were made; verify the account in Supabase Auth before retrying.",
+      });
+    }
+
+    const { error: deleteError } = await adminClient.auth.admin.deleteUser(renter.user_id);
+    if (deleteError) return res.status(500).json({ error: `Could not remove the linked renter login: ${deleteError.message}` });
+    loginDeleted = true;
+  }
+
+  const { data: clearedRenter, error: clearEmailError } = await adminClient
+    .from("renters")
+    .update({ email: null })
+    .eq("id", renter.id)
+    .eq("status", "terminated")
+    .is("user_id", null)
+    .select("id")
+    .maybeSingle();
+  if (clearEmailError) {
+    const detail = loginDeleted
+      ? " The linked login was removed, but the contract email could not be cleared. Retry this action."
+      : " The contract email could not be cleared.";
+    return res.status(500).json({ error: `Could not clear the contract email.${detail}` });
+  }
+  if (!clearedRenter) {
+    const detail = loginDeleted
+      ? " The linked login was removed, but the contract email could not be cleared. Refresh and retry this action."
+      : " No changes were made.";
+    return res.status(409).json({ error: `The terminated renter record changed before the email could be cleared.${detail}` });
+  }
+
+  res.json({ loginDeleted, emailCleared: true });
+});
+
 app.post("/api/admin/renters/:renterId/account", requireAdmin, async (req, res) => {
   const { password } = req.body || {};
   const emailInput = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
