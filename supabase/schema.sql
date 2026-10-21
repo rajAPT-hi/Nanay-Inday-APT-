@@ -1,4 +1,5 @@
 create extension if not exists pgcrypto;
+create extension if not exists pg_cron;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -156,9 +157,9 @@ set search_path = ''
 as $$
 declare
   renter_row public.renters;
-  month_start date;
   due_date_value date;
-  first_month date;
+  target_month date;
+  schedule_date date := timezone('Asia/Manila', now())::date;
   scheduled_due_dates date[] := array[]::date[];
 begin
   select * into renter_row
@@ -174,69 +175,56 @@ begin
     where renter_id = renter_row.id
       and auto_generated
       and status = 'pending'
-      and due_date >= current_date;
+      and due_date >= schedule_date;
     return;
   end if;
 
-  first_month := greatest(
-    date_trunc('month', renter_row.contract_start)::date,
-    date_trunc('month', current_date)::date
+  target_month := date_trunc('month', schedule_date + interval '1 month')::date;
+  due_date_value := target_month + (
+    least(
+      renter_row.rent_due_day,
+      extract(day from (target_month + interval '1 month' - interval '1 day'))::integer
+    ) - 1
   );
 
-  for month_start in
-    select month_value::date
-    from generate_series(
-      first_month::timestamp,
-      date_trunc('month', renter_row.contract_end)::timestamp,
-      interval '1 month'
-    ) as generated_months(month_value)
-  loop
-    due_date_value := month_start + (
-      least(
-        renter_row.rent_due_day,
-        extract(day from (month_start + interval '1 month' - interval '1 day'))::integer
-      ) - 1
-    );
+  if due_date_value >= renter_row.contract_start
+    and due_date_value <= renter_row.contract_end then
+    scheduled_due_dates := array_append(scheduled_due_dates, due_date_value);
 
-    if due_date_value >= renter_row.contract_start
-      and due_date_value <= renter_row.contract_end then
-      scheduled_due_dates := array_append(scheduled_due_dates, due_date_value);
-
-      if not exists (
-        select 1
-        from public.payments existing_payment
-        where existing_payment.renter_id = renter_row.id
-          and existing_payment.due_date = due_date_value
-          and existing_payment.period not like '%Utilities'
-      ) then
-        insert into public.payments as scheduled_payment (
-          renter_id, period, due_date, base_amount, utility_amount, amount, status, auto_generated
-        ) values (
-          renter_row.id,
-          to_char(due_date_value, 'FMMonth YYYY'),
-          due_date_value,
-          renter_row.rent_amount,
-          0,
-          renter_row.rent_amount,
-          'pending',
-          true
-        )
-        on conflict (renter_id, due_date) where auto_generated
-        do update set
-          period = excluded.period,
-          base_amount = excluded.base_amount,
-          utility_amount = excluded.utility_amount,
-          amount = excluded.amount
-        where scheduled_payment.status = 'pending';
-      end if;
+    if not exists (
+      select 1
+      from public.payments existing_payment
+      where existing_payment.renter_id = renter_row.id
+        and existing_payment.due_date = due_date_value
+        and existing_payment.period not like '%Utilities'
+    ) then
+      insert into public.payments as scheduled_payment (
+        renter_id, period, due_date, base_amount, utility_amount, amount, status, auto_generated
+      ) values (
+        renter_row.id,
+        to_char(due_date_value, 'FMMonth YYYY'),
+        due_date_value,
+        renter_row.rent_amount,
+        0,
+        renter_row.rent_amount,
+        'pending',
+        true
+      )
+      on conflict (renter_id, due_date) where auto_generated
+      do update set
+        period = excluded.period,
+        base_amount = excluded.base_amount,
+        utility_amount = excluded.utility_amount,
+        amount = excluded.amount
+      where scheduled_payment.status = 'pending';
     end if;
-  end loop;
+  end if;
 
   delete from public.payments scheduled_payment
   where scheduled_payment.renter_id = renter_row.id
     and scheduled_payment.auto_generated
     and scheduled_payment.status = 'pending'
-    and scheduled_payment.due_date >= current_date
+    and scheduled_payment.due_date >= schedule_date
     and (
       scheduled_payment.due_date <> all(scheduled_due_dates)
       or exists (
@@ -248,6 +236,23 @@ begin
           and manual_payment.period not like '%Utilities'
       )
     );
+end;
+$$;
+
+create or replace function public.schedule_monthly_rent_payments()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  renter_row record;
+begin
+  for renter_row in
+    select id from public.renters where status = 'active'
+  loop
+    perform public.schedule_renter_rent_payments(renter_row.id);
+  end loop;
 end;
 $$;
 
@@ -273,7 +278,14 @@ end;
 $$;
 
 revoke all on function public.schedule_renter_rent_payments(uuid) from public, anon, authenticated;
+revoke all on function public.schedule_monthly_rent_payments() from public, anon, authenticated;
 revoke all on function public.sync_renter_rent_payment_schedule() from public, anon, authenticated;
+
+select cron.schedule(
+  'schedule-monthly-rent-payments',
+  '0 16 14 * *',
+  'select public.schedule_monthly_rent_payments();'
+);
 
 drop trigger if exists schedule_renter_rent_payments on public.renters;
 create trigger schedule_renter_rent_payments
@@ -281,14 +293,8 @@ create trigger schedule_renter_rent_payments
   for each row execute function public.sync_renter_rent_payment_schedule();
 
 do $$
-declare
-  renter_row record;
 begin
-  for renter_row in
-    select id from public.renters where status = 'active'
-  loop
-    perform public.schedule_renter_rent_payments(renter_row.id);
-  end loop;
+  perform public.schedule_monthly_rent_payments();
 end;
 $$;
 
