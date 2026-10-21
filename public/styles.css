@@ -88,6 +88,10 @@ td { border-top: 1px solid #f0f2ef; padding: 12px 11px; font-size: 11px; white-s
 .toolbar { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
 .payment-toolbar { flex-wrap: wrap; }
 .payment-toolbar .search { flex: 1 1 220px; }
+.date-range-filter { display: flex; align-items: center; gap: 8px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-size: 11px; }
+.date-range-filter label { white-space: nowrap; }
+.date-range-filter input[type="date"] { min-width: 140px; border: 0; background: transparent; padding: 7px 2px; color: var(--ink); font: inherit; }
+.date-range-filter input[type="date"]:focus { outline: 2px solid #8ab39a; outline-offset: 1px; border-radius: 4px; }
 .payment-result-count { margin: 0 0 12px; }
 .search { border: 1px solid var(--line); border-radius: 9px; background: #fff; padding: 10px 12px; min-width: 190px; font-size: 12px; outline: none; }
 .search:focus, .field input:focus, .field select:focus { border-color: #8ab39a; box-shadow: 0 0 0 3px rgb(40 107 80 / 8%); }
@@ -289,6 +293,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .renewal-renter-card .card-head { flex-direction: column; }
   .payment-toolbar > * { flex: 1 1 100%; }
   .payment-toolbar .search { min-width: 0; }
+  .date-range-filter { flex-wrap: wrap; }
+  .date-range-filter input[type="date"] { flex: 1 1 140px; }
   .nav button { font-size: 12px; }
   .topbar { margin-bottom: 22px; }
   .welcome { padding: 22px; }

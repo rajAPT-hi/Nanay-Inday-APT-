@@ -29,7 +29,7 @@ let state = {
     grace_period_days: 3,
   },
 };
-const paymentFilters = { search: "", month: "all", status: "all", method: "all", location: "all", rentalType: "all" };
+const paymentFilters = { search: "", startDate: "", endDate: "", status: "all", method: "all", location: "all", rentalType: "all" };
 
 async function fetchCloudData() {
   const { data: profile, error: profileError } = await supabase
@@ -297,16 +297,15 @@ function renewalRequestsAdminPanel() {
 }
 function paymentsPage() {
   const payments = [...state.payments].sort((a, b) => new Date(b.due_date) - new Date(a.due_date));
-  const monthOptions = [...new Set(payments.map((payment) => payment.due_date?.slice(0, 7)).filter(Boolean))].sort().reverse();
   const locations = [...new Set(state.renters.map((renter) => renter.location).filter(Boolean))].sort();
   return `<div class="section-title"><div><p>Review receipts, track rent, and follow up on unpaid balances.</p></div></div>
     <div class="toolbar payment-toolbar">
       <input class="search" id="payment-search" type="search" value="${escapeHtml(paymentFilters.search)}" placeholder="⌕  Search renter, unit, or period..." aria-label="Search payments" />
-      <select class="filter" id="payment-month-filter" aria-label="Filter by billing month"><option value="all" ${paymentFilters.month === "all" ? "selected" : ""}>All billing months</option>${monthOptions.map((month) => {
-        const [year, monthNumber] = month.split("-").map(Number);
-        const label = new Date(year, monthNumber - 1, 1).toLocaleDateString("en-PH", { month: "long", year: "numeric" });
-        return `<option value="${month}" ${paymentFilters.month === month ? "selected" : ""}>${escapeHtml(label)}</option>`;
-      }).join("")}</select>
+      <div class="date-range-filter" role="group" aria-label="Filter payments by due date range">
+        <label for="payment-start-date">Due from</label><input class="filter" id="payment-start-date" type="date" value="${escapeHtml(paymentFilters.startDate)}" aria-label="Payment due date from" />
+        <span aria-hidden="true">to</span>
+        <label for="payment-end-date">Due through</label><input class="filter" id="payment-end-date" type="date" value="${escapeHtml(paymentFilters.endDate)}" aria-label="Payment due date through" />
+      </div>
       <select class="filter" id="payment-status-filter" aria-label="Filter by payment status"><option value="all" ${paymentFilters.status === "all" ? "selected" : ""}>All statuses</option><option value="pending" ${paymentFilters.status === "pending" ? "selected" : ""}>Pending</option><option value="review" ${paymentFilters.status === "review" ? "selected" : ""}>Awaiting review</option><option value="paid" ${paymentFilters.status === "paid" ? "selected" : ""}>Paid</option></select>
       <select class="filter" id="payment-method-filter" aria-label="Filter by payment method"><option value="all" ${paymentFilters.method === "all" ? "selected" : ""}>All methods</option><option value="cash" ${paymentFilters.method === "cash" ? "selected" : ""}>Cash</option><option value="online" ${paymentFilters.method === "online" ? "selected" : ""}>Online</option><option value="unknown" ${paymentFilters.method === "unknown" ? "selected" : ""}>Not recorded</option></select>
       <select class="filter" id="payment-location-filter" aria-label="Filter by location"><option value="all" ${paymentFilters.location === "all" ? "selected" : ""}>All locations</option>${locations.map((location) => `<option value="${escapeHtml(location)}" ${paymentFilters.location === location ? "selected" : ""}>${escapeHtml(location)}</option>`).join("")}</select>
@@ -328,17 +327,19 @@ function paymentRowsMarkup(payments) {
 }
 function updatePaymentsFromFilters() {
   paymentFilters.search = document.querySelector("#payment-search")?.value.trim() || "";
-  paymentFilters.month = document.querySelector("#payment-month-filter")?.value || "all";
+  paymentFilters.startDate = document.querySelector("#payment-start-date")?.value || "";
+  paymentFilters.endDate = document.querySelector("#payment-end-date")?.value || "";
   paymentFilters.status = document.querySelector("#payment-status-filter")?.value || "all";
   paymentFilters.method = document.querySelector("#payment-method-filter")?.value || "all";
   paymentFilters.location = document.querySelector("#payment-location-filter")?.value || "all";
   paymentFilters.rentalType = document.querySelector("#payment-type-filter")?.value || "all";
   const query = paymentFilters.search.toLowerCase();
-  const { month, status, method, location, rentalType } = paymentFilters;
+  const { startDate, endDate, status, method, location, rentalType } = paymentFilters;
   const matches = state.payments.filter((payment) => {
     const renter = renterById(payment.renter_id);
     const paymentText = `${renter.full_name || ""} ${renter.unit_name || ""} ${payment.period || ""} ${payment.due_date || ""}`.toLowerCase();
-    return (month === "all" || payment.due_date?.slice(0, 7) === month) &&
+    return (!startDate || payment.due_date >= startDate) &&
+      (!endDate || payment.due_date <= endDate) &&
       (status === "all" || payment.status === status) &&
       (method === "all" || (method === "unknown" ? !payment.payment_method : payment.payment_method === method)) &&
       (location === "all" || renter.location === location) &&
@@ -350,7 +351,11 @@ function updatePaymentsFromFilters() {
   const stats = document.querySelector("#payment-stats");
   if (stats) stats.innerHTML = paymentStatsMarkup(matches);
   const resultCount = document.querySelector("#payment-result-count");
-  if (resultCount) resultCount.textContent = `Showing ${matches.length} of ${state.payments.length} payments`;
+  if (resultCount) {
+    resultCount.textContent = startDate && endDate && startDate > endDate
+      ? "The start date must be on or before the end date."
+      : `Showing ${matches.length} of ${state.payments.length} payments${startDate || endDate ? ` · Due date${startDate && endDate ? "s" : ""}: ${startDate ? formatDate(startDate) : "any"} to ${endDate ? formatDate(endDate) : "any"}` : ""}`;
+  }
 }
 function proofFileActions(payment, kind) {
   const online = kind === "online";
@@ -1385,10 +1390,10 @@ document.addEventListener("click", async (event) => {
   if (action === "print-payment-receipt") return printPaymentReceipt(id);
   if (action === "refresh-payment-history") return refreshPaymentHistory();
   if (action === "clear-payment-filters") {
-    Object.assign(paymentFilters, { search: "", month: "all", status: "all", method: "all", location: "all", rentalType: "all" });
-    for (const selector of ["#payment-search", "#payment-month-filter", "#payment-status-filter", "#payment-method-filter", "#payment-location-filter", "#payment-type-filter"]) {
+    Object.assign(paymentFilters, { search: "", startDate: "", endDate: "", status: "all", method: "all", location: "all", rentalType: "all" });
+    for (const selector of ["#payment-search", "#payment-start-date", "#payment-end-date", "#payment-status-filter", "#payment-method-filter", "#payment-location-filter", "#payment-type-filter"]) {
       const control = document.querySelector(selector);
-      if (control) control.value = selector === "#payment-search" ? "" : "all";
+      if (control) control.value = ["#payment-search", "#payment-start-date", "#payment-end-date"].includes(selector) ? "" : "all";
     }
     return updatePaymentsFromFilters();
   }
@@ -1475,7 +1480,7 @@ document.addEventListener("input", (event) => {
 });
 document.addEventListener("change", (event) => {
   if (event.target.matches("#renter-filter, #renter-location-filter")) updateRenterTableFromFilters();
-  if (event.target.matches("#payment-month-filter, #payment-status-filter, #payment-method-filter, #payment-location-filter, #payment-type-filter")) updatePaymentsFromFilters();
+  if (event.target.matches("#payment-start-date, #payment-end-date, #payment-status-filter, #payment-method-filter, #payment-location-filter, #payment-type-filter")) updatePaymentsFromFilters();
 });
 function updateRenterTableFromFilters() {
   const query = document.querySelector("#renter-search")?.value.toLowerCase() || "";
